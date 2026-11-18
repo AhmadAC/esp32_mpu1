@@ -34,12 +34,13 @@ static void console_read_task(void *pvParameter) {
 
     const char *banner =
         "\n==================================================\n"
-        "   YD-ESP32-S3 MG996R Single Servo Controller\n"
-        "   Servo Motor: GPIO 1 (50Hz PWM, 500-2500us)\n"
-        "   Control: BLE NUS ('ESP32S3-Arm'), USB Serial & Joystick\n"
+        "   YD-ESP32-S3 3-Servo Arm Controller + MPU-6050\n"
+        "   Claw: GPIO 1 | Arm: GPIO 38 | Shoulder: GPIO 39\n"
+        "   MPU-6050: SDA GPIO 8 | SCL GPIO 9\n"
+        "   Control: BLE NUS ('ESP32S3-Arm') & Native USB REPL\n"
         "==================================================\n"
-        "Commands: 's1 90', 'move 180 500', 'home', 'detach',\n"
-        "          'action_run 1', 'action_get', 'help'\n"
+        "Commands: 's1 90', 'move 90 90 90 500', 'home', 'detach',\n"
+        "          'mpu on', 'mpu_cal gyro', 'action_run 1', 'help'\n"
         "==================================================\n"
         "REPL> ";
     console_print(banner);
