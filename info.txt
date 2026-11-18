@@ -1,0 +1,81 @@
+================================================================================
+              YD-ESP32-S3 3-SERVO ARM + MPU-6050 HARDWARE PINOUT MAPPING
+================================================================================
+
+1. MP90S SERVO MOTOR WIRING (3-AXIS SERVO ARM):
+--------------------------------------------------------------------------------
+Servo Channel   Joint           YD-ESP32-S3 Pin     Notes
+Common GND      Ground          GND                 Common Ground (Share w/ PSU)
+Servo Power     5V Power        External 5V         5V 2A+ external supply recommended
+Servo 1 (S1)    Claw (Gripper)  GPIO 1              50Hz LEDC PWM (550-2450us)
+Servo 2 (S2)    Arm             GPIO 38             50Hz LEDC PWM (550-2450us)
+Servo 3 (S3)    Shoulder        GPIO 39             50Hz LEDC PWM (550-2450us)
+
+
+2. MPU-6050 (GY-521) IMU WIRING (I2C):
+--------------------------------------------------------------------------------
+MPU-6050 Pin    YD-ESP32-S3 Pin     Function
+VCC             3.3V                Power (GY-521 boards also accept 5V on VCC)
+GND             GND                 Common Ground
+SDA             GPIO 8              I2C data
+SCL             GPIO 9              I2C clock
+AD0             GND                 I2C address 0x68 (tie to 3.3V for 0x69)
+INT             not connected       Unused
+
+The PS2 joystick (GPIO 2, 3, 4) is no longer used and can be unwired.
+
+Sensor axes (chip facing up, board flat): X = right, Y = forward, Z = up.
+Orientation convention (right-hand rule): roll = about X, pitch = about Y, yaw = about Z.
+
+MPU CONTROL BEHAVIOR (MPU Control ON):
+- Roll  tilt -> Servo 2 (Arm,      GPIO 38)
+- Pitch tilt -> Servo 3 (Shoulder, GPIO 39)
+- Yaw   twist -> Servo 1 (Claw,    GPIO 1)   (disabled by default; yaw is gyro-integrated and drifts)
+- servo_angle = 90 +/- sensitivity * tilt_deg, where tilt is measured from the saved neutral pose.
+- Each axis can be enabled/disabled and inverted from the app.
+- home, stop, detach, move, set, seq and action commands release MPU control automatically.
+
+CALIBRATION (from the app or serial):
+1. Calibrate Gyro   (mpu_cal gyro)    : sensor still, ~2 s, stores gyro bias in flash
+2. Calibrate Accel  (mpu_cal accel)   : sensor flat, chip up, still, ~2 s, stores accel bias
+3. Set Neutral      (mpu_cal neutral) : current pose becomes the center (servos at 90)
+4. Zero Yaw         (mpu_cal yaw)     : current heading becomes yaw 0
+5. Clear            (mpu_cal clear)   : erase all MPU calibration
+
+
+3. BLUETOOTH LOW ENERGY (BLE) SPECIFICATION:
+--------------------------------------------------------------------------------
+Device Advertised Name:     ESP32S3-Arm
+GATT Service (NUS):         6e400001-b5a3-f393-e0a9-e50e24dcca9e
+RX Characteristic (Write):  6e400002-b5a3-f393-e0a9-e50e24dcca9e
+TX Characteristic (Notify): 6e400003-b5a3-f393-e0a9-e50e24dcca9e
+
+
+4. BLE & USB SERIAL COMMAND REFERENCE:
+--------------------------------------------------------------------------------
+- s1 <0-180> / s2 <0-180> / s3 <0-180> : Move individual servo immediately
+- claw <0-180|open|close>             : Control Claw (GPIO 1)
+- arm <0-180>                          : Control Arm (GPIO 38)
+- shoulder <0-180>                     : Control Shoulder (GPIO 39)
+- set <s1> <s2> <s3>                   : Move all 3 servos immediately
+- move <s1> <s2> <s3> [ms]             : Smoothly ease all 3 servos over duration
+- home                                 : Smoothly move all 3 servos to 90 deg
+- stop                                 : Stop any running action or loop (releases MPU control)
+- status                               : Query live angles, offsets, run state
+- mpu <on|off>                         : Start/stop IMU telemetry over BLE (20 Hz)
+- mpu_read                             : Print one IMU line (USB serial debugging)
+- mpu_get                              : Print MPU hardware, calibration and control state
+- mpu_cal <gyro|accel|neutral|yaw|clear> : Calibrate the MPU-6050
+- mpu_ctrl <on|off>                    : Let the MPU-6050 control the arm
+- mpu_gain <0.5-4.0> [save]            : Sensitivity (servo degrees per degree of tilt)
+- mpu_axes <r> <p> <y>                 : Enable axes (0 or 1 each)
+- mpu_inv <r> <p> <y>                  : Invert axes (0 or 1 each)
+
+BLE TELEMETRY LINES (ESP32 -> app):
+- IMU:roll,pitch,yaw,ax,ay,az,gx,gy,gz,temp
+- MPUHW:ok=1,addr=104
+- MPUCAL:gyro=1,accel=1,nr=..,np=..,ny=..,gbx=..,gby=..,gbz=..,abx=..,aby=..,abz=..
+- MPUCALPROG:kind=gyro,pct=50
+- MPUCALRES:kind=gyro,ok=1,msg=Gyro bias saved
+- MPUCTRL:on=1,gain=2.00,er=1,ep=1,ey=0,ir=0,ip=0,iy=0
+================================================================================
