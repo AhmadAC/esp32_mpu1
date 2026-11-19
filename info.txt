@@ -12,15 +12,17 @@ Servo 2 (S2)    Arm             GPIO 38             50Hz LEDC PWM (550-2450us)
 Servo 3 (S3)    Shoulder        GPIO 39             50Hz LEDC PWM (550-2450us)
 
 
-2. MPU-6050 (GY-521) IMU WIRING (I2C):
+2. MPU-6050 (GY-521 8-PIN BREAKOUT) IMU WIRING (I2C):
 --------------------------------------------------------------------------------
-MPU-6050 Pin    YD-ESP32-S3 Pin     Function
-VCC             3.3V                Power (GY-521 boards also accept 5V on VCC)
-GND             GND                 Common Ground
-SDA             GPIO 8              I2C data
-SCL             GPIO 9              I2C clock
-AD0             GND                 I2C address 0x68 (tie to 3.3V for 0x69)
-INT             not connected       Unused
+Pin  MPU-6050 Pin   YD-ESP32-S3 Pin     Function / Connection Details
+1    VCC            3.3V                Power supply (3.3V logic level matched)
+2    GND            GND                 Common Ground (shared with ESP32 and PSU)
+3    SCL            GPIO 9              I2C0 Serial Clock (SCL)
+4    SDA            GPIO 8              I2C0 Serial Data (SDA)
+5    XDA            Not Connected       Auxiliary I2C data (secondary compass bus only)
+6    XCL            Not Connected       Auxiliary I2C clock (secondary compass bus only)
+7    AD0            GND                 I2C Address Select: GND = 0x68 (3.3V = 0x69)
+8    INT            Not Connected       Hardware interrupt (unused; 200Hz polling used)
 
 The PS2 joystick (GPIO 2, 3, 4) is no longer used and can be unwired.
 

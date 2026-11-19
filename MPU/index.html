@@ -56,14 +56,14 @@
       </div>
 
       <div class="seg">
-        <button type="button" id="seg-arm" class="seg-btn active" onclick="setSceneMode('arm')">Robot Arm</button>
-        <button type="button" id="seg-imu" class="seg-btn" onclick="setSceneMode('imu')">MPU-6050 Board</button>
+        <button type="button" id="seg-arm" class="seg-btn" onclick="setSceneMode('arm')">Robot Arm</button>
+        <button type="button" id="seg-imu" class="seg-btn active" onclick="setSceneMode('imu')">MPU-6050 Board</button>
       </div>
 
       <div class="canvas-wrap"><canvas id="scene-canvas"></canvas></div>
 
       <div class="canvas-tools">
-        <span id="scene-hint">Arm model follows the live servo angles. Drag to orbit, pinch to zoom.</span>
+        <span id="scene-hint">GY-521 board stands upright on its pins. Drag to orbit, pinch to zoom.</span>
         <button type="button" class="link-btn" onclick="resetSceneView()">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
           Reset View
@@ -103,7 +103,7 @@
         </div>
       </div>
 
-      <div id="cal-hint" class="cal-hint">Step 1: place the sensor flat and still, then tap Calibrate Gyro. Step 2: with it flat, tap Calibrate Accel. Step 3: hold the pose you want as center and tap Set Neutral.</div>
+      <div id="cal-hint" class="cal-hint">Step 1: Keep sensor resting standing on its pins and tap Calibrate Gyro. Step 2: Keep still and tap Calibrate Accel. Step 3: Tap Set Neutral to lock the standing pose as center (0 deg).</div>
 
       <div id="cal-progress" class="progress"><div id="cal-progress-bar"></div></div>
 
@@ -136,7 +136,7 @@
         <span id="cal-accel-bias">Accel bias  --</span>
         <span id="cal-neutral">Neutral  --</span>
       </div>
-      <div class="note">Calibration results are stored in ESP32 flash automatically. Yaw is gyro-integrated (the MPU-6050 has no compass), so it drifts slowly; use Zero Yaw to re-center.</div>
+      <div class="note">Calibration results are stored in ESP32 flash automatically. Upright calibration on pins is fully supported. Use Zero Yaw to re-center heading if needed.</div>
     </div>
 
     <!-- MPU Arm Control -->
@@ -161,7 +161,7 @@
 
       <div id="ctrl-axis-rows" style="display:flex; flex-direction:column; gap:8px;"></div>
 
-      <div class="note">Tilt the sensor away from the neutral pose to move the arm: 1 degree of tilt moves the servo by the sensitivity value in degrees. Set Neutral first so the arm starts centered.</div>
+      <div class="note">Tilt the sensor away from the upright neutral pose to move the arm. Tap Set Neutral first so the arm starts centered.</div>
     </div>
 
     <!-- Quick Arm Controls -->

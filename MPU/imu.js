@@ -44,7 +44,6 @@ function fmtSigned(v, digits) {
   return (n >= 0 ? "+" : "") + n.toFixed(digits);
 }
 
-// Returns true when the line was an IMU/MPU protocol line and has been consumed
 function handleImuLine(text) {
   if (text.startsWith("IMU:")) {
     const v = text.substring(4).split(",").map(Number);
@@ -188,10 +187,10 @@ function setCalButtonsDisabled(disabled) {
 }
 
 const CAL_HINTS = {
-  gyro: "Hold the sensor completely still. Sampling gyro bias for about 2 seconds...",
-  accel: "Keep the sensor flat (chip facing up) and still. Sampling accelerometer bias...",
-  neutral: "Saving the current pose as the neutral (center) pose for arm control...",
-  yaw: "Yaw set to zero at the current heading.",
+  gyro: "Keep the sensor stationary in its standing position (on pins). Sampling gyro bias for ~2 seconds...",
+  accel: "Keep the sensor resting stationary on its pins. Sampling accelerometer bias...",
+  neutral: "Current standing orientation locked as 0 deg neutral center!",
+  yaw: "Yaw zeroed at current heading.",
   clear: "All MPU calibration cleared."
 };
 
@@ -313,7 +312,7 @@ function setSceneMode(mode) {
   if (b) b.className = "seg-btn" + (mode === "imu" ? " active" : "");
   setText("scene-hint", mode === "arm"
     ? "Arm model follows the live servo angles. Drag to orbit, pinch to zoom."
-    : "IMU board follows the sensor orientation. Drag to orbit, pinch to zoom.");
+    : "GY-521 board stands upright on its pins. Drag to orbit, pinch to zoom.");
 }
 
 function resetSceneView() {
@@ -338,7 +337,7 @@ function initImuUI() {
   renderImuReadouts();
   renderImuLinkBadge();
   renderCalProgress(-1);
-  setSceneMode("arm");
+  setSceneMode("imu");
   if (typeof Scene3D !== "undefined") {
     Scene3D.init(document.getElementById("scene-canvas"));
   }

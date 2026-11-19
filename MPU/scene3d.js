@@ -53,7 +53,8 @@ const Scene3D = (function () {
   function rotX(a) { const c = Math.cos(a), s = Math.sin(a); return [1, 0, 0, 0, c, -s, 0, s, c]; }
   function rotY(a) { const c = Math.cos(a), s = Math.sin(a); return [c, 0, s, 0, 1, 0, -s, 0, c]; }
   function rotZ(a) { const c = Math.cos(a), s = Math.sin(a); return [c, -s, 0, s, c, 0, 0, 0, 1]; }
-  // Matches firmware convention: R = Rz(yaw) * Ry(pitch) * Rx(roll)
+
+  // Orientation relative to the standing neutral pose
   function eulerToR(rollDeg, pitchDeg, yawDeg) {
     return mm(rotZ(yawDeg * DEG), mm(rotY(pitchDeg * DEG), rotX(rollDeg * DEG)));
   }
@@ -127,7 +128,6 @@ const Scene3D = (function () {
       const toCam = sub(cam.pos, c);
       let n = poly.outward;
       if (n) {
-        // Convex solid: faces pointing away from the camera are hidden
         if (dot(n, toCam) < 0) continue;
       } else {
         n = norm(cross(sub(p[1], p[0]), sub(p[2], p[0])));
@@ -150,7 +150,6 @@ const Scene3D = (function () {
     }
   }
 
-  // Mark convex-solid polygons with outward normals so back faces can be culled
   function withOutward(polys, center) {
     for (const poly of polys) {
       const p = poly.pts;
@@ -207,19 +206,52 @@ const Scene3D = (function () {
     }
   }
 
-  // ---------- models ----------
+  // Real GY-521 8-Pin breakout geometry standing upright on its pins
   function buildImuBoard(R) {
     const polys = [];
-    const o = [0, 0, 0];
-    polys.push(...withOutward(boxPolys(o, R, [1.15, 0.8, 0.07], [20, 140, 150]), o));
-    const chipC = add(o, mv(R, [0.1, 0, 0.12]));
-    polys.push(...withOutward(boxPolys(chipC, R, [0.32, 0.32, 0.06], [30, 41, 59]), chipC));
-    for (let i = 0; i < 4; i++) {
-      const pc = add(o, mv(R, [-0.9 + i * 0.22, 0.62, 0.12]));
-      polys.push(...withOutward(boxPolys(pc, R, [0.08, 0.08, 0.1], [245, 190, 60]), pc));
+    // Standing upright: center is elevated so the bottom pins touch the ground plane
+    const o = [0, 0, 0.4];
+
+    // Main PCB (Dark Blue GY-521 board): Width across Y = 2.1, Height along Z = 1.6, Thickness = 0.08
+    polys.push(...withOutward(boxPolys(o, R, [0.04, 1.05, 0.8], [18, 55, 115]), o));
+
+    // Two Top Mounting Holes
+    for (const side of [-1, 1]) {
+      const hole = add(o, mv(R, [0, side * 0.82, 0.55]));
+      polys.push(...withOutward(prismPolys(hole, mm(R, rotY(Math.PI / 2)), 0.12, 0.05, 12, [212, 175, 55]), hole));
     }
-    const hole = add(o, mv(R, [0.9, -0.55, 0]));
-    polys.push(...withOutward(prismPolys(hole, mm(R, rotX(Math.PI / 2)), 0.1, 0.075, 10, [8, 47, 73]), hole));
+
+    // Central MPU-6050 IC chip (Matte dark grey package)
+    const chipC = add(o, mv(R, [0.06, 0.0, 0.0]));
+    polys.push(...withOutward(boxPolys(chipC, R, [0.03, 0.32, 0.32], [28, 32, 38]), chipC));
+
+    // IC Pin 1 Orientation Dot (Silver dot on the top corner)
+    const dotC = add(o, mv(R, [0.09, -0.22, 0.22]));
+    polys.push(...withOutward(boxPolys(dotC, R, [0.01, 0.04, 0.04], [220, 220, 220]), dotC));
+
+    // Green Power LED (as glowing in photos)
+    const ledC = add(o, mv(R, [0.06, 0.65, -0.2]));
+    polys.push(...withOutward(boxPolys(ledC, R, [0.03, 0.08, 0.08], [34, 197, 94]), ledC));
+
+    // Small 3.3V Onboard LDO Regulator
+    const regC = add(o, mv(R, [0.06, 0.0, 0.52]));
+    polys.push(...withOutward(boxPolys(regC, R, [0.02, 0.18, 0.12], [47, 55, 69]), regC));
+
+    // Black plastic pin header along the bottom edge (Z = -0.8)
+    const headerC = add(o, mv(R, [-0.12, 0.0, -0.8]));
+    polys.push(...withOutward(boxPolys(headerC, R, [0.12, 1.02, 0.12], [15, 23, 42]), headerC));
+
+    // 8 Right-Angle Bent Pins (1:VCC, 2:GND, 3:SCL, 4:SDA, 5:XDA, 6:XCL, 7:AD0, 8:INT)
+    for (let i = 0; i < 8; i++) {
+      const yPos = -0.875 + i * 0.25;
+      // Horizontal pin leg extending backward
+      const pinLeg = add(o, mv(R, [-0.3, yPos, -0.8]));
+      polys.push(...withOutward(boxPolys(pinLeg, R, [0.15, 0.035, 0.035], [234, 179, 8]), pinLeg));
+      // Vertical pin leg pointing down to table
+      const pinFoot = add(o, mv(R, [-0.45, yPos, -1.1]));
+      polys.push(...withOutward(boxPolys(pinFoot, R, [0.035, 0.035, 0.3], [234, 179, 8]), pinFoot));
+    }
+
     return polys;
   }
 
@@ -298,7 +330,7 @@ const Scene3D = (function () {
       drawAxes(cam, [0, 0, -1.3], I, 1.2, 1.4, 0.35, false);
       const R = eulerToR(shown.roll, shown.pitch, shown.yaw);
       drawPolys(cam, buildImuBoard(R));
-      drawAxes(cam, [0, 0, 0], R, 1.9, 2.6, 1, true);
+      drawAxes(cam, [0, 0, 0.4], R, 1.6, 2.4, 0.95, true);
     } else {
       const angles = (typeof servoAngles !== "undefined") ? servoAngles : [90, 90, 90];
       const arm = buildArm(angles, { l1: 1.7, l2: 1.45 });

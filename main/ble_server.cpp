@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include "esp_log.h"
 #include "esp_system.h"
+#include "esp_bt.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
@@ -212,6 +213,9 @@ static int ble_gap_event(struct ble_gap_event *event, void *arg) {
             s_rx_line_len = 0;
             portEXIT_CRITICAL(&s_rx_mux);
 
+            // Configure power for connection handle
+            esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_CONN_HDL0, ESP_PWR_LVL_P3);
+
             // Request iOS-compatible connection interval & 4s supervision timeout for battery resilience
             struct ble_gap_upd_params conn_params = {};
             conn_params.itvl_min = 24;              // 30 ms
@@ -297,8 +301,9 @@ static void ble_advertise(void) {
     memset(&adv_params, 0, sizeof(adv_params));
     adv_params.conn_mode = BLE_GAP_CONN_MODE_UND;
     adv_params.disc_mode = BLE_GAP_DISC_MODE_GEN;
-    adv_params.itvl_min = 0x0040; // 40 ms
-    adv_params.itvl_max = 0x0080; // 80 ms
+    // Set 100ms - 200ms advertising interval: vastly reduces surge draw on battery power
+    adv_params.itvl_min = 0x00A0; // 100 ms
+    adv_params.itvl_max = 0x0140; // 200 ms
 
     rc = ble_gap_adv_start(s_own_addr_type, NULL, BLE_HS_FOREVER,
                            &adv_params, ble_gap_event, NULL);
@@ -328,6 +333,10 @@ static void ble_on_sync(void) {
         ESP_LOGE(TAG, "ble_hs_id_infer_auto failed: rc=%d", rc);
         s_own_addr_type = BLE_OWN_ADDR_PUBLIC;
     }
+
+    // Set balanced RF TX power to +3dBm to avoid high inrush battery brownout
+    esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_DEFAULT, ESP_PWR_LVL_P3);
+    esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_ADV, ESP_PWR_LVL_P3);
 
     ESP_LOGI(TAG, "NimBLE host synchronized (addr_type=%d)", s_own_addr_type);
     ble_advertise();
