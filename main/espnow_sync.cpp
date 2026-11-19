@@ -3,6 +3,7 @@
 #include "servo_controller.h"
 #include "command_processor.h"
 #include "console_serial.h"
+#include "mpu_control.h"
 
 #include <string.h>
 #include <stdio.h>
@@ -286,7 +287,6 @@ static void espnow_sync_task(void *pvParameters) {
                 notify_link_state();
             } else {
                 if (s_local_role == ESPNOW_ROLE_RECEIVER) {
-                    // Transmit Arm & Scissor status back to MPU Sender
                     int s1 = 90, s2 = 90, s3 = 90, s4 = 90;
                     int o1 = 0,  o2 = 0,  o3 = 0,  o4 = 0;
                     int smin = 0, smax = 180;
@@ -351,7 +351,6 @@ void espnow_sync_init(espnow_role_t role) {
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_start());
 
-    // Disable modem power save to ensure RF is active for all ESP-NOW packets
     ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
     ESP_ERROR_CHECK(esp_wifi_set_channel(ESPNOW_CHANNEL, WIFI_SECOND_CHAN_NONE));
     ESP_ERROR_CHECK(esp_wifi_get_mac(WIFI_IF_STA, s_local_mac));

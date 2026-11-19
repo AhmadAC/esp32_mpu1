@@ -1,52 +1,52 @@
 const DEFAULT_ACTIONS = {
-  1: { name: "Home", steps: [{ s1: 90, s2: 90, s3: 90, move: 500, wait: 0 }] },
-  2: { name: "Open", steps: [{ s1: 90, s2: 60, s3: 170, move: 400, wait: 0 }] },
-  3: { name: "Grab", steps: [{ s1: 90, s2: 120, s3: 20, move: 400, wait: 0 }] },
+  1: { name: "Home", steps: [{ s1: 90, s2: 90, s3: 90, s4: 90, move: 500, wait: 0 }] },
+  2: { name: "Open & Lift", steps: [{ s1: 90, s2: 60, s3: 170, s4: 180, move: 400, wait: 0 }] },
+  3: { name: "Grab & Lower", steps: [{ s1: 90, s2: 120, s3: 20, s4: 0, move: 400, wait: 0 }] },
   4: {
     name: "Pick & Place",
     steps: [
-      { s1: 45, s2: 130, s3: 160, move: 500, wait: 200 },
-      { s1: 45, s2: 130, s3: 25, move: 400, wait: 300 },
-      { s1: 45, s2: 60, s3: 25, move: 500, wait: 200 },
-      { s1: 135, s2: 60, s3: 25, move: 600, wait: 200 },
-      { s1: 135, s2: 130, s3: 25, move: 500, wait: 200 },
-      { s1: 135, s2: 130, s3: 160, move: 400, wait: 200 },
-      { s1: 90, s2: 90, s3: 90, move: 500, wait: 0 }
+      { s1: 45, s2: 130, s3: 160, s4: 0, move: 500, wait: 200 },
+      { s1: 45, s2: 130, s3: 25, s4: 0, move: 400, wait: 300 },
+      { s1: 45, s2: 60, s3: 25, s4: 120, move: 500, wait: 200 },
+      { s1: 135, s2: 60, s3: 25, s4: 120, move: 600, wait: 200 },
+      { s1: 135, s2: 130, s3: 25, s4: 0, move: 500, wait: 200 },
+      { s1: 135, s2: 130, s3: 160, s4: 0, move: 400, wait: 200 },
+      { s1: 90, s2: 90, s3: 90, s4: 90, move: 500, wait: 0 }
     ]
   },
   5: {
     name: "Wave",
     steps: [
-      { s1: 90, s2: 45, s3: 90, move: 400, wait: 100 },
-      { s1: 45, s2: 45, s3: 150, move: 300, wait: 150 },
-      { s1: 135, s2: 45, s3: 30, move: 300, wait: 150 },
-      { s1: 45, s2: 45, s3: 150, move: 300, wait: 150 },
-      { s1: 135, s2: 45, s3: 30, move: 300, wait: 150 },
-      { s1: 90, s2: 90, s3: 90, move: 400, wait: 0 }
+      { s1: 90, s2: 45, s3: 90, s4: 90, move: 400, wait: 100 },
+      { s1: 45, s2: 45, s3: 150, s4: 150, move: 300, wait: 150 },
+      { s1: 135, s2: 45, s3: 30, s4: 30, move: 300, wait: 150 },
+      { s1: 45, s2: 45, s3: 150, s4: 150, move: 300, wait: 150 },
+      { s1: 135, s2: 45, s3: 30, s4: 30, move: 300, wait: 150 },
+      { s1: 90, s2: 90, s3: 90, s4: 90, move: 400, wait: 0 }
     ]
   },
   6: {
     name: "Sweep",
     steps: [
-      { s1: 10, s2: 90, s3: 90, move: 600, wait: 200 },
-      { s1: 170, s2: 90, s3: 90, move: 800, wait: 200 },
-      { s1: 90, s2: 90, s3: 90, move: 600, wait: 0 }
+      { s1: 10, s2: 90, s3: 90, s4: 45, move: 600, wait: 200 },
+      { s1: 170, s2: 90, s3: 90, s4: 135, move: 800, wait: 200 },
+      { s1: 90, s2: 90, s3: 90, s4: 90, move: 600, wait: 0 }
     ]
   },
-  7: { name: "Rest", steps: [{ s1: 90, s2: 160, s3: 10, move: 600, wait: 0 }] },
+  7: { name: "Rest", steps: [{ s1: 90, s2: 160, s3: 10, s4: 0, move: 600, wait: 0 }] },
   8: {
     name: "Nod",
     steps: [
-      { s1: 90, s2: 40, s3: 90, move: 350, wait: 150 },
-      { s1: 90, s2: 110, s3: 90, move: 350, wait: 150 },
-      { s1: 90, s2: 40, s3: 90, move: 350, wait: 150 },
-      { s1: 90, s2: 90, s3: 90, move: 400, wait: 0 }
+      { s1: 90, s2: 40, s3: 90, s4: 90, move: 350, wait: 150 },
+      { s1: 90, s2: 110, s3: 90, s4: 120, move: 350, wait: 150 },
+      { s1: 90, s2: 40, s3: 90, s4: 90, move: 350, wait: 150 },
+      { s1: 90, s2: 90, s3: 90, s4: 90, move: 400, wait: 0 }
     ]
   }
 };
 
 let armActions = {};
-let actionTapMode = "run"; // "run" | "loop" | "edit"
+let actionTapMode = "run";
 let editingSlot = 1;
 let editorSteps = [];
 let activeRunningSlot = 0;
@@ -59,7 +59,7 @@ function cloneDefaultActions() {
 
 function initActionsStorage() {
   try {
-    const stored = localStorage.getItem("arm_programmable_actions");
+    const stored = localStorage.getItem("arm_scissor_actions_v1");
     armActions = stored ? JSON.parse(stored) : cloneDefaultActions();
   } catch (e) {
     armActions = cloneDefaultActions();
@@ -69,13 +69,13 @@ function initActionsStorage() {
 
 function persistActionsLocal() {
   try {
-    localStorage.setItem("arm_programmable_actions", JSON.stringify(armActions));
+    localStorage.setItem("arm_scissor_actions_v1", JSON.stringify(armActions));
   } catch (e) {}
 }
 
 function stepsToString(steps) {
   return steps
-    .map(st => `${clampAngle(st.s1)},${clampAngle(st.s2)},${clampAngle(st.s3)},${clampMs(st.move, 10000)},${clampMs(st.wait, 30000)}`)
+    .map(st => `${clampAngle(st.s1)},${clampAngle(st.s2)},${clampAngle(st.s3)},${clampAngle(st.s4 !== undefined ? st.s4 : 90)},${clampMs(st.move, 10000)},${clampMs(st.wait, 30000)}`)
     .join(";");
 }
 
@@ -87,10 +87,21 @@ function stringToSteps(str) {
     .filter(Boolean)
     .map(tok => {
       const p = tok.split(",").map(n => parseInt(n.trim(), 10));
+      if (p.length >= 6) {
+        return {
+          s1: clampAngle(isNaN(p[0]) ? 90 : p[0]),
+          s2: clampAngle(isNaN(p[1]) ? 90 : p[1]),
+          s3: clampAngle(isNaN(p[2]) ? 90 : p[2]),
+          s4: clampAngle(isNaN(p[3]) ? 90 : p[3]),
+          move: clampMs(isNaN(p[4]) ? 400 : p[4], 10000),
+          wait: clampMs(isNaN(p[5]) ? 0 : p[5], 30000)
+        };
+      }
       return {
         s1: clampAngle(isNaN(p[0]) ? 90 : p[0]),
         s2: clampAngle(isNaN(p[1]) ? 90 : p[1]),
         s3: clampAngle(isNaN(p[2]) ? 90 : p[2]),
+        s4: 90,
         move: clampMs(isNaN(p[3]) ? 400 : p[3], 10000),
         wait: clampMs(isNaN(p[4]) ? 0 : p[4], 30000)
       };
@@ -164,7 +175,7 @@ function setActionTapMode(mode) {
     hint.innerText = "Tap an action to loop continuously until Stop.";
     editor.style.display = "none";
   } else {
-    hint.innerText = "Tap any slot to program steps, speeds, and delays.";
+    hint.innerText = "Tap any slot to program 4-axis steps, speeds, and delays.";
     openActionEditor(editingSlot);
   }
   renderActionsGrid();
@@ -211,11 +222,12 @@ function renderEditorSteps() {
   list.innerHTML = "";
 
   if (editorSteps.length === 0) {
-    list.innerHTML = '<div style="font-size:11px; color:rgba(255,255,255,0.45); text-align:center; padding:12px;">No steps yet. Tap "+ Capture Sliders" to add current arm pose.</div>';
+    list.innerHTML = '<div style="font-size:11px; color:rgba(255,255,255,0.45); text-align:center; padding:12px;">No steps yet. Tap "+ Capture Pose" to add current arm &amp; scissor pose.</div>';
     return;
   }
 
   editorSteps.forEach((st, idx) => {
+    const s4Val = (st.s4 !== undefined) ? st.s4 : 90;
     const row = document.createElement("div");
     row.className = "step-row";
     row.innerHTML = `
@@ -228,18 +240,22 @@ function renderEditorSteps() {
           <button type="button" onclick="deleteStep(${idx})" style="background:#ef4444; color:white; border:none; border-radius:4px; padding:2px 6px; font-size:9.5px; font-weight:700; cursor:pointer; display:inline-flex; align-items:center;"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
         </div>
       </div>
-      <div class="step-inputs">
+      <div class="step-inputs" style="grid-template-columns: repeat(6, 1fr);">
         <div class="step-field">
-          <label>S1 (°)</label>
+          <label>S1 Claw</label>
           <input type="number" min="0" max="180" value="${st.s1}" onchange="updateStepField(${idx}, 's1', this.value)">
         </div>
         <div class="step-field">
-          <label>S2 (°)</label>
+          <label>S2 Arm</label>
           <input type="number" min="0" max="180" value="${st.s2}" onchange="updateStepField(${idx}, 's2', this.value)">
         </div>
         <div class="step-field">
-          <label>S3 (°)</label>
+          <label>S3 Shld</label>
           <input type="number" min="0" max="180" value="${st.s3}" onchange="updateStepField(${idx}, 's3', this.value)">
+        </div>
+        <div class="step-field">
+          <label style="color:#fbbf24;">S4 Scis</label>
+          <input type="number" min="0" max="180" value="${s4Val}" onchange="updateStepField(${idx}, 's4', this.value)">
         </div>
         <div class="step-field">
           <label>Move ms</label>
@@ -264,11 +280,12 @@ function captureCurrentPoseStep() {
     s1: servoAngles[0],
     s2: servoAngles[1],
     s3: servoAngles[2],
+    s4: servoAngles[3],
     move: 450,
     wait: 150
   });
   renderEditorSteps();
-  showToast(`Captured (${servoAngles[0]}°, ${servoAngles[1]}°, ${servoAngles[2]}°)`, "info");
+  showToast(`Captured (${servoAngles[0]}°, ${servoAngles[1]}°, ${servoAngles[2]}°, ${servoAngles[3]}°)`, "info");
 }
 
 function addBlankStep() {
@@ -276,13 +293,13 @@ function addBlankStep() {
     showToast("Max 24 steps per action.", "warn");
     return;
   }
-  editorSteps.push({ s1: 90, s2: 90, s3: 90, move: 450, wait: 150 });
+  editorSteps.push({ s1: 90, s2: 90, s3: 90, s4: 90, move: 450, wait: 150 });
   renderEditorSteps();
 }
 
 function updateStepField(idx, field, val) {
   if (!editorSteps[idx]) return;
-  if (field === "s1" || field === "s2" || field === "s3") {
+  if (field === "s1" || field === "s2" || field === "s3" || field === "s4") {
     editorSteps[idx][field] = clampAngle(val);
   } else if (field === "move") {
     editorSteps[idx].move = clampMs(val, 10000);
@@ -294,8 +311,9 @@ function updateStepField(idx, field, val) {
 function previewStep(idx) {
   const st = editorSteps[idx];
   if (!st) return;
-  sendCommand(`move ${st.s1} ${st.s2} ${st.s3} ${st.move}`);
-  applyReceivedAngles(st.s1, st.s2, st.s3);
+  const s4 = (st.s4 !== undefined) ? st.s4 : 90;
+  sendCommand(`move ${st.s1} ${st.s2} ${st.s3} ${s4} ${st.move}`);
+  applyReceivedAngles(st.s1, st.s2, st.s3, s4);
 }
 
 function moveStep(idx, dir) {
@@ -363,7 +381,6 @@ function resetActionsDefaults() {
 }
 
 function applyReceivedAction(rawDef) {
-  // Format: "<slot>=<name>|<steps>"
   const eqIdx = rawDef.indexOf("=");
   if (eqIdx <= 0) return;
   const slot = parseInt(rawDef.substring(0, eqIdx), 10);

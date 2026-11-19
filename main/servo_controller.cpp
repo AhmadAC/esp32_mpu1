@@ -74,7 +74,6 @@ static uint32_t calc_duty(int idx, int angle, int offset) {
     int eff = angle + offset;
 
     if (idx == 3) {
-        // Scissor lift constrained to trimmed end-stops
         if (eff < s_scissor_min) eff = s_scissor_min;
         if (eff > s_scissor_max) eff = s_scissor_max;
     }
@@ -171,7 +170,6 @@ static size_t parse_sequence_steps(const char *steps_str, servo_step_t *out_step
         int s1 = 90, s2 = 90, s3 = 90, s4 = 90, move = 400, wait = 0;
         int matched = sscanf(p, "%d,%d,%d,%d,%d,%d", &s1, &s2, &s3, &s4, &move, &wait);
         if (matched >= 5) {
-            // 4 servos + move + wait
             out_steps[count].s1 = (s1 < 0) ? 0 : (s1 > 180 ? 180 : s1);
             out_steps[count].s2 = (s2 < 0) ? 0 : (s2 > 180 ? 180 : s2);
             out_steps[count].s3 = (s3 < 0) ? 0 : (s3 > 180 ? 180 : s3);
@@ -180,7 +178,6 @@ static size_t parse_sequence_steps(const char *steps_str, servo_step_t *out_step
             out_steps[count].wait_ms = (matched >= 6 && wait > 0) ? (wait > 30000 ? 30000 : wait) : 0;
             count++;
         } else {
-            // Legacy fallback: 3 servos + move + wait
             int m3 = sscanf(p, "%d,%d,%d,%d,%d", &s1, &s2, &s3, &move, &wait);
             if (m3 >= 3) {
                 out_steps[count].s1 = (s1 < 0) ? 0 : (s1 > 180 ? 180 : s1);
@@ -355,7 +352,6 @@ void servo_controller_init(void) {
     ledc_timer.clk_cfg          = LEDC_AUTO_CLK;
     ESP_ERROR_CHECK(ledc_timer_config(&ledc_timer));
 
-    // Initialize 4 LEDC channels with 0 duty
     for (int i = 0; i < SERVO_COUNT; i++) {
         s_enabled[i] = false;
         ledc_channel_config_t ledc_ch = {};
@@ -698,3 +694,4 @@ bool servo_run_sequence_str(const char *seq_str, bool loop) {
     xTaskCreatePinnedToCore(sequence_runner_task, "seq_run_task", 4096, NULL, 5, &s_seq_task_handle, 1);
     return true;
 }
+

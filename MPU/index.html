@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-  <title>ESP32-S3 Wireless Arm Control (ESP-NOW)</title>
+  <title>ESP32-S3 Wireless Arm &amp; Scissor Lift Control</title>
   <link rel="stylesheet" href="style.css">
   <link rel="stylesheet" href="imu.css">
 </head>
@@ -19,7 +19,7 @@
 
   <header style="padding-bottom:8px; border-bottom:1px solid rgba(255,255,255,0.1); display:flex; align-items:center; justify-content:space-between;">
     <div>
-      <h1 style="font-size:1.05rem; font-weight:700; letter-spacing:-0.02em;">Wireless Arm Control Center</h1>
+      <h1 style="font-size:1.05rem; font-weight:700; letter-spacing:-0.02em;">Arm &amp; Scissor Lift Mission Control</h1>
       <div style="display:flex; align-items:center; gap:6px; margin-top:2px;">
         <div id="status-dot" style="width:8px; height:8px; border-radius:9999px; background:#f43f5e; box-shadow:0 0 6px #f43f5e; transition:background 0.2s;"></div>
         <span id="status-text" style="font-size:11px; color:rgba(255,255,255,0.6);">Disconnected</span>
@@ -64,7 +64,7 @@
         <span class="val" id="espnow-role-val">MPU Sender</span>
       </div>
       <div class="espnow-detail-box">
-        <span class="lbl">Peer Arm Node</span>
+        <span class="lbl">Peer Node</span>
         <span class="val" id="espnow-peer-val">--:--:--:--:--:--</span>
       </div>
       <div class="espnow-detail-box">
@@ -75,6 +75,108 @@
   </div>
 
   <main style="flex:1; min-height:0; overflow-y:auto; display:flex; flex-direction:column; gap:12px; padding-right:2px; touch-action:pan-y;" class="no-scrollbar">
+
+    <!-- Scissor Lift Proportional Control & End-Stop Trim -->
+    <div class="glass-panel panel" style="border-color:rgba(245,158,11,0.45);">
+      <div class="panel-head">
+        <span class="panel-title" style="color:#fbbf24;">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="7 11 12 6 17 11"></polyline><polyline points="7 17 12 12 17 17"></polyline>
+          </svg>
+          Scissor Lift (MG996R on GPIO 12)
+        </span>
+        <div style="display:flex; gap:6px; align-items:center;">
+          <span id="s4-state-badge" class="pin-badge" style="background:rgba(148,163,184,0.15); color:#94a3b8; border-color:rgba(148,163,184,0.3);">IDLE</span>
+          <span id="saved-range-badge" class="chip chip-ok">Range: 0° – 180°</span>
+        </div>
+      </div>
+
+      <!-- Scissor Lift 0-100% Proportional Slider -->
+      <div class="servo-card">
+        <div style="display:flex; justify-content:space-between; align-items:center; font-size:11px; margin-bottom:6px;">
+          <span style="font-weight:700; color:#f8fafc;">Lift Height: <span id="lift-val" style="color:#fbbf24; font-family:monospace; font-weight:700;">50% (90°)</span></span>
+          <span class="pin-badge">Arm GP12</span>
+        </div>
+        <input type="range" id="lift-slider" min="0" max="100" value="50" onpointerdown="onLiftSliderStart()" ontouchstart="onLiftSliderStart()" oninput="onLiftSlider(this.value)" onchange="onLiftSliderCommit(this.value)">
+        <div class="servo-btn-row">
+          <button type="button" class="trim-btn" onclick="nudgeLiftPercent(-10)">-10%</button>
+          <button type="button" class="trim-btn" onclick="nudgeLiftPercent(-1)">-1%</button>
+          <button type="button" class="trim-btn" onclick="nudgeLiftPercent(1)">+1%</button>
+          <button type="button" class="trim-btn" onclick="nudgeLiftPercent(10)">+10%</button>
+        </div>
+      </div>
+
+      <!-- Quick Preset Buttons -->
+      <div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:8px;">
+        <button type="button" class="touch-btn" onclick="moveToSavedMin()" style="padding:10px 6px; background:#0369a1; font-size:11px; flex-direction:row; gap:4px;">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="7 13 12 18 17 13"></polyline><line x1="5" y1="21" x2="19" y2="21"></line></svg>
+          <span id="quick-min-lbl">Min (0°)</span>
+        </button>
+        <button type="button" class="touch-btn" onclick="moveToSavedMid()" style="padding:10px 6px; background:#0284c7; font-size:11px; flex-direction:row; gap:4px;">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path></svg>
+          <span id="quick-mid-lbl">Mid (90°)</span>
+        </button>
+        <button type="button" class="touch-btn" onclick="moveToSavedMax()" style="padding:10px 6px; background:#0369a1; font-size:11px; flex-direction:row; gap:4px;">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 11 12 6 7 11"></polyline><line x1="5" y1="3" x2="19" y2="3"></line></svg>
+          <span id="quick-max-lbl">Max (180°)</span>
+        </button>
+      </div>
+
+      <!-- End-Stop Trimming Section -->
+      <div style="border-top:1px solid rgba(255,255,255,0.08); padding-top:8px; display:flex; flex-direction:column; gap:8px;">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <span style="font-size:10.5px; font-weight:700; color:rgba(255,255,255,0.7); text-transform:uppercase;">End-Stop Trimming (Both Ends)</span>
+          <span id="trim-sync-badge" class="chip chip-ok">Saved</span>
+        </div>
+
+        <!-- Min End Trim -->
+        <div class="servo-card trim-end-card">
+          <div style="display:flex; justify-content:space-between; align-items:center; font-size:11px; margin-bottom:4px;">
+            <span style="font-weight:700; color:#fbbf24;">Bottom End: <span id="min-trim-val" style="font-family:monospace; color:#ffffff;">0°</span></span>
+            <button type="button" onclick="testTrimEnd('min')" style="background:#334155; color:#7dd3fc; border:1px solid #475569; border-radius:6px; padding:3px 8px; font-size:10px; font-weight:700; cursor:pointer;">Test Min</button>
+          </div>
+          <input type="range" id="min-trim-slider" class="offset-slider" min="0" max="179" value="0" oninput="onMinTrimSlider(this.value)">
+          <div class="servo-btn-row">
+            <button type="button" class="trim-btn" onclick="nudgeMinTrim(-10)">-10°</button>
+            <button type="button" class="trim-btn" onclick="nudgeMinTrim(-1)">-1°</button>
+            <button type="button" class="trim-btn" onclick="nudgeMinTrim(1)">+1°</button>
+            <button type="button" class="trim-btn" onclick="nudgeMinTrim(10)">+10°</button>
+          </div>
+        </div>
+
+        <!-- Max End Trim -->
+        <div class="servo-card trim-end-card">
+          <div style="display:flex; justify-content:space-between; align-items:center; font-size:11px; margin-bottom:4px;">
+            <span style="font-weight:700; color:#fbbf24;">Top End: <span id="max-trim-val" style="font-family:monospace; color:#ffffff;">180°</span></span>
+            <button type="button" onclick="testTrimEnd('max')" style="background:#334155; color:#7dd3fc; border:1px solid #475569; border-radius:6px; padding:3px 8px; font-size:10px; font-weight:700; cursor:pointer;">Test Max</button>
+          </div>
+          <input type="range" id="max-trim-slider" class="offset-slider" min="1" max="180" value="180" oninput="onMaxTrimSlider(this.value)">
+          <div class="servo-btn-row">
+            <button type="button" class="trim-btn" onclick="nudgeMaxTrim(-10)">-10°</button>
+            <button type="button" class="trim-btn" onclick="nudgeMaxTrim(-1)">-1°</button>
+            <button type="button" class="trim-btn" onclick="nudgeMaxTrim(1)">+1°</button>
+            <button type="button" class="trim-btn" onclick="nudgeMaxTrim(10)">+10°</button>
+          </div>
+        </div>
+
+        <div style="display:grid; grid-template-columns:1.3fr 1fr; gap:6px; margin-top:2px;">
+          <button id="save-scissor-range-btn" type="button" class="touch-btn" onclick="saveScissorRange()" style="padding:10px; border-radius:8px; background:#10b981; color:white; font-size:11px; font-weight:700; border:none; cursor:pointer; flex-direction:row; gap:6px;">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
+              <polyline points="17 21 17 13 7 13 7 21"></polyline>
+            </svg>
+            <span id="save-scissor-range-text">Save Trim to Flash</span>
+          </button>
+          <button type="button" class="touch-btn" onclick="resetScissorRange()" style="padding:10px; border-radius:8px; background:#475569; color:white; font-size:11px; font-weight:700; border:none; cursor:pointer; flex-direction:row; gap:6px;">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="1 4 1 10 7 10"></polyline>
+              <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path>
+            </svg>
+            <span>Reset 0°–180°</span>
+          </button>
+        </div>
+      </div>
+    </div>
 
     <!-- 3D Live View -->
     <div class="glass-panel panel" style="border-color:rgba(56,189,248,0.4);">
@@ -170,7 +272,7 @@
       <div class="note">Calibration results are stored in ESP32 flash automatically. Upright calibration on pins is fully supported. Use Zero Yaw to re-center heading if needed.</div>
     </div>
 
-    <!-- MPU Arm Control (Wireless via ESP-NOW) -->
+    <!-- MPU Motion Control -->
     <div class="glass-panel panel" style="border-color:rgba(16,185,129,0.4);">
       <div class="panel-head">
         <span class="panel-title" style="color:#34d399;">
@@ -195,7 +297,7 @@
       <div class="note">Tilt the MPU node away from upright neutral to drive the remote Arm over ESP-NOW. Tap Set Neutral first so the arm starts centered.</div>
     </div>
 
-    <!-- Quick Arm Controls -->
+    <!-- Quick Arm & System Controls -->
     <div class="glass-panel" style="border-radius:16px; padding:12px; display:flex; flex-direction:column; gap:10px;">
       <div style="display:flex; justify-content:space-between; align-items:center;">
         <span style="font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:0.05em; color:#38bdf8; display:flex; align-items:center; gap:6px;">
@@ -213,7 +315,7 @@
       <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
         <button type="button" class="touch-btn" onclick="homeAllServos()" style="padding:10px 6px; background:#0284c7; font-size:11px; flex-direction:row; gap:5px;">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path></svg>
-          <span>Home (90°)</span>
+          <span>Home All (90°)</span>
         </button>
         <button type="button" class="touch-btn" onclick="detachAllServos()" style="padding:10px 6px; background:#f59e0b; color:#000000; border-color:#f59e0b; font-size:11px; font-weight:700; flex-direction:row; gap:5px;">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"></path><line x1="12" y1="2" x2="12" y2="12"></line></svg>
@@ -230,7 +332,7 @@
       </div>
     </div>
 
-    <!-- 3 MP90S Servo Sliders (Wireless Link to Receiver) -->
+    <!-- 3 Arm Servos Sliders (Claw, Arm, Shoulder) -->
     <div class="glass-panel" style="border-radius:16px; padding:12px; display:flex; flex-direction:column; gap:10px; border-color:rgba(56,189,248,0.4);">
       <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid rgba(255,255,255,0.1); padding-bottom:6px; gap:6px; flex-wrap:wrap;">
         <span style="font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:0.05em; color:#38bdf8; display:flex; align-items:center; gap:6px;">
@@ -333,7 +435,7 @@
       </div>
     </div>
 
-    <!-- Programmable Actions Studio -->
+    <!-- Programmable Actions Studio (Arm & Scissor) -->
     <div class="glass-panel" style="border-radius:16px; padding:12px; display:flex; flex-direction:column; gap:10px;">
       <div style="display:flex; justify-content:space-between; align-items:center; font-size:12px; border-bottom:1px solid rgba(255,255,255,0.1); padding-bottom:8px; gap:8px; flex-wrap:wrap;">
         <span style="font-weight:700; text-transform:uppercase; letter-spacing:0.05em; color:#a855f7; display:flex; align-items:center; gap:6px;">
@@ -366,13 +468,13 @@
 
         <div>
           <label style="font-size:10px; color:rgba(255,255,255,0.6); display:block; margin-bottom:4px;">Action Name:</label>
-          <input type="text" id="action-name-input" maxlength="24" placeholder="e.g. Pick Cube" style="width:100%; background:#1e293b; color:white; border:1px solid #334155; border-radius:8px; padding:7px 10px; font-size:12px; outline:none;">
+          <input type="text" id="action-name-input" maxlength="24" placeholder="e.g. Pick &amp; Lift" style="width:100%; background:#1e293b; color:white; border:1px solid #334155; border-radius:8px; padding:7px 10px; font-size:12px; outline:none;">
         </div>
 
         <div style="display:flex; justify-content:space-between; align-items:center; margin-top:2px;">
           <span style="font-size:10px; font-weight:700; color:rgba(255,255,255,0.7); text-transform:uppercase;">Sequence Steps</span>
           <div style="display:flex; gap:6px;">
-            <button type="button" onclick="captureCurrentPoseStep()" style="padding:5px 9px; border-radius:7px; background:#0284c7; color:white; font-size:10px; font-weight:700; border:none; cursor:pointer;">+ Capture Sliders</button>
+            <button type="button" onclick="captureCurrentPoseStep()" style="padding:5px 9px; border-radius:7px; background:#0284c7; color:white; font-size:10px; font-weight:700; border:none; cursor:pointer;">+ Capture Pose</button>
             <button type="button" onclick="addBlankStep()" style="padding:5px 9px; border-radius:7px; background:#334155; color:white; font-size:10px; font-weight:700; border:none; cursor:pointer;">+ Step</button>
           </div>
         </div>
@@ -417,7 +519,7 @@
       </div>
 
       <div id="terminal" style="flex:1; overflow-y:auto; padding-top:6px; font-family:monospace; font-size:10px; color:rgba(255,255,255,0.8); display:flex; flex-direction:column; gap:4px;">
-        <div style="color:rgba(255,255,255,0.4); font-style:italic;">BLE Arm Console initialized. Ready to connect...</div>
+        <div style="color:rgba(255,255,255,0.4); font-style:italic;">BLE Arm &amp; Scissor Console initialized. Ready to connect...</div>
       </div>
     </div>
 
@@ -425,7 +527,7 @@
 
   <footer style="margin-top:8px;">
     <form onsubmit="handleSendCustom(event)" style="display:flex; gap:8px;">
-      <input type="text" id="cmd-input" placeholder="Command (e.g. s1 90, mpu_ctrl on, espnow)..." style="flex:1; background:rgba(255,255,255,0.1); border:1px solid rgba(255,255,255,0.15); border-radius:12px; padding:8px 12px; font-size:12px; color:white; outline:none;">
+      <input type="text" id="cmd-input" placeholder="Command (e.g. s1 90, lift 75, range_set 20 160, mpu_ctrl on)..." style="flex:1; background:rgba(255,255,255,0.1); border:1px solid rgba(255,255,255,0.15); border-radius:12px; padding:8px 12px; font-size:12px; color:white; outline:none;">
       <button type="submit" class="touch-btn" style="padding:0 16px; border-radius:12px; background:#0284c7; color:white; font-size:12px; font-weight:600; border:none; cursor:pointer; flex-direction:row; gap:6px;">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
         <span>Send</span>
@@ -441,3 +543,4 @@
   <script src="app.js"></script>
 </body>
 </html>
+
