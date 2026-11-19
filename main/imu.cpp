@@ -12,25 +12,30 @@
 
 static const char *TAG = "IMU";
 
-#define LOOP_MS               5        // 200 Hz sampling / fusion
+#define LOOP_MS               5        // 200 Hz sampling & fusion
 #define TELEMETRY_DIV         10       // 20 Hz BLE telemetry
-#define CAL_SAMPLES           400      // 2 s of samples per calibration
+#define CAL_SAMPLES           400      // 2 s sampling window
 #define STALE_US              150000
 #define RAD2DEG               57.29577951f
 #define DEG2RAD               0.01745329252f
-#define GYRO_DEADBAND_DPS     0.2f
-#define GYRO_STILL_RANGE_LSB  400      // max peak-to-peak gyro noise while still
-#define ACCEL_STILL_RANGE_LSB 700      // max peak-to-peak accel noise while still
-#define MAX_READ_FAILS        50
-#define MAHONY_KP             0.40f    // attitude filter proportional convergence rate
 
-#define CAL_MAGIC             0x4D505545u
+// Stillness detection thresholds for resting on table
+#define STILL_GYRO_DPS        0.65f    // below this rate, sensor is still
+#define STILL_ACCEL_TOL_G     0.07f    // magnitude deviation allowed
+#define STILL_CONFIRM_TICKS   40       // ~200ms of quiet before locking still
+
+// Calibration noise tolerance (relaxed to tolerate table vibration)
+#define CAL_GYRO_RANGE_LSB    600
+#define CAL_ACCEL_RANGE_LSB   1200
+#define MAX_READ_FAILS        50
+
+#define CAL_MAGIC             0x4D505546u
 
 typedef struct {
     uint32_t magic;
-    float    gyro_bias[3];   // deg/s
-    float    accel_bias[3];  // g
-    float    neutral_q[4];   // [w, x, y, z] neutral quaternion
+    float    gyro_bias[3];    // deg/s
+    float    accel_bias[3];   // g
+    float    neutral_angles[3]; // [roll, pitch, yaw] neutral reference
     uint8_t  gyro_ok;
     uint8_t  accel_ok;
     uint8_t  neutral_ok;
@@ -50,19 +55,21 @@ static portMUX_TYPE s_lock = portMUX_INITIALIZER_UNLOCKED;
 static imu_pose_t   s_pose;
 static int64_t      s_pose_us   = 0;
 static imu_cal_t    s_cal_shared;
-static volatile bool s_sensor_ok = false;
-static volatile bool s_stream    = false;
-static volatile int  s_cal_req   = REQ_NONE;
-static volatile bool s_cal_busy  = false;
+static volatile bool s_sensor_ok  = false;
+static volatile bool s_stream     = false;
+static volatile int  s_cal_req    = REQ_NONE;
+static volatile bool s_cal_busy   = false;
+static volatile bool s_is_still   = true;
+
+static float wrap180(float a) {
+    while (a > 180.0f) a -= 360.0f;
+    while (a < -180.0f) a += 360.0f;
+    return a;
+}
 
 static void cal_defaults(imu_cal_t *c) {
     memset(c, 0, sizeof(*c));
     c->magic = CAL_MAGIC;
-    // Default neutral orientation: standing upright on pins (+X up, pitch -90 deg from flat)
-    c->neutral_q[0] = 0.7071068f; // w = cos(-45 deg)
-    c->neutral_q[1] = 0.0f;
-    c->neutral_q[2] = -0.7071068f;// y = sin(-45 deg)
-    c->neutral_q[3] = 0.0f;
     c->neutral_ok = 1;
 }
 
@@ -105,8 +112,9 @@ static void cal_share(const imu_cal_t *c) {
 
 static void format_cal_line(char *buf, size_t len, const imu_cal_t *c) {
     snprintf(buf, len,
-             "MPUCAL:gyro=%d,accel=%d,nr=0.0,np=0.0,ny=0.0,gbx=%.2f,gby=%.2f,gbz=%.2f,abx=%.3f,aby=%.3f,abz=%.3f\n",
+             "MPUCAL:gyro=%d,accel=%d,nr=%.1f,np=%.1f,ny=%.1f,gbx=%.2f,gby=%.2f,gbz=%.2f,abx=%.3f,aby=%.3f,abz=%.3f\n",
              c->gyro_ok ? 1 : 0, c->accel_ok ? 1 : 0,
+             c->neutral_angles[0], c->neutral_angles[1], c->neutral_angles[2],
              c->gyro_bias[0], c->gyro_bias[1], c->gyro_bias[2],
              c->accel_bias[0], c->accel_bias[1], c->accel_bias[2]);
 }
@@ -155,45 +163,9 @@ static bool pose_snapshot(imu_pose_t *out) {
 bool imu_format_line(char *buf, size_t len) {
     imu_pose_t p;
     if (!pose_snapshot(&p)) return false;
-    snprintf(buf, len, "IMU:%.1f,%.1f,%.1f,%.3f,%.3f,%.3f,%.1f,%.1f,%.1f,%.1f\n",
-             p.roll, p.pitch, p.yaw, p.ax, p.ay, p.az, p.gx, p.gy, p.gz, p.temp);
+    snprintf(buf, len, "IMU:%.1f,%.1f,%.1f,%.3f,%.3f,%.3f,%.1f,%.1f,%.1f,%.1f,still=%d\n",
+             p.roll, p.pitch, p.yaw, p.ax, p.ay, p.az, p.gx, p.gy, p.gz, p.temp, s_is_still ? 1 : 0);
     return true;
-}
-
-static void quat_mult(const float q1[4], const float q2[4], float out[4]) {
-    out[0] = q1[0]*q2[0] - q1[1]*q2[1] - q1[2]*q2[2] - q1[3]*q2[3];
-    out[1] = q1[0]*q2[1] + q1[1]*q2[0] + q1[2]*q2[3] - q1[3]*q2[2];
-    out[2] = q1[0]*q2[2] - q1[1]*q2[3] + q1[2]*q2[0] + q1[3]*q2[1];
-    out[3] = q1[0]*q2[3] + q1[1]*q2[2] - q1[2]*q2[1] + q1[3]*q2[0];
-}
-
-static void quat_conj(const float q[4], float out[4]) {
-    out[0] =  q[0];
-    out[1] = -q[1];
-    out[2] = -q[2];
-    out[3] = -q[3];
-}
-
-static void quat_to_euler_deg(const float q[4], float *roll, float *pitch, float *yaw) {
-    float w = q[0], x = q[1], y = q[2], z = q[3];
-
-    // Roll (X-axis)
-    float sinr_cosp = 2.0f * (w * x + y * z);
-    float cosr_cosp = 1.0f - 2.0f * (x * x + y * y);
-    *roll = atan2f(sinr_cosp, cosr_cosp) * RAD2DEG;
-
-    // Pitch (Y-axis)
-    float sinp = 2.0f * (w * y - z * x);
-    if (fabsf(sinp) >= 1.0f) {
-        *pitch = copysignf(90.0f, sinp);
-    } else {
-        *pitch = asinf(sinp) * RAD2DEG;
-    }
-
-    // Yaw (Z-axis)
-    float siny_cosp = 2.0f * (w * z + x * y);
-    float cosy_cosp = 1.0f - 2.0f * (y * y + z * z);
-    *yaw = atan2f(siny_cosp, cosy_cosp) * RAD2DEG;
 }
 
 static void imu_task(void *pvParameters) {
@@ -204,13 +176,13 @@ static void imu_task(void *pvParameters) {
     cal_share(&cal);
 
     bool initialized = false;
-    float q[4] = { 1.0f, 0.0f, 0.0f, 0.0f };
-    float yaw_offset_deg = 0.0f;
+    float roll = 0.0f, pitch = 0.0f, yaw = 0.0f;
 
     int64_t last_us = esp_timer_get_time();
     int64_t last_probe_us = 0;
     int tele_div = 0;
     int read_fails = 0;
+    int still_counter = 0;
 
     int collecting = REQ_NONE;
     int n = 0;
@@ -225,7 +197,7 @@ static void imu_task(void *pvParameters) {
         vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(LOOP_MS));
         int64_t now_us = esp_timer_get_time();
 
-        // Sensor presence check / re-probe
+        // Check sensor presence / re-probe if disconnected
         if (!s_sensor_ok) {
             if (now_us - last_probe_us > 1000000) {
                 last_probe_us = now_us;
@@ -254,12 +226,10 @@ static void imu_task(void *pvParameters) {
                 notify_progress(req == REQ_GYRO ? "gyro" : "accel", 0);
             } else if (req == REQ_NEUTRAL) {
                 if (initialized) {
-                    cal.neutral_q[0] = q[0];
-                    cal.neutral_q[1] = q[1];
-                    cal.neutral_q[2] = q[2];
-                    cal.neutral_q[3] = q[3];
+                    cal.neutral_angles[0] = roll;
+                    cal.neutral_angles[1] = pitch;
+                    cal.neutral_angles[2] = yaw;
                     cal.neutral_ok = 1;
-                    yaw_offset_deg = 0.0f;
                     cal_save(&cal);
                     cal_share(&cal);
                     notify_result("neutral", true, "Neutral upright pose saved");
@@ -268,12 +238,8 @@ static void imu_task(void *pvParameters) {
                 }
                 notify_cal_state(&cal);
             } else if (req == REQ_YAW) {
-                float r, p, y;
-                float q_inv[4], q_rel[4];
-                quat_conj(cal.neutral_q, q_inv);
-                quat_mult(q_inv, q, q_rel);
-                quat_to_euler_deg(q_rel, &r, &p, &y);
-                yaw_offset_deg = y;
+                cal.neutral_angles[2] = yaw;
+                cal_share(&cal);
                 notify_result("yaw", true, "Yaw zeroed at current heading");
                 notify_cal_state(&cal);
             } else if (req == REQ_CLEAR) {
@@ -281,7 +247,7 @@ static void imu_task(void *pvParameters) {
                 cal_clear_nvs();
                 cal_share(&cal);
                 initialized = false;
-                yaw_offset_deg = 0.0f;
+                roll = 0.0f; pitch = 0.0f; yaw = 0.0f;
                 notify_result("clear", true, "All MPU calibration cleared");
                 notify_cal_state(&cal);
             }
@@ -301,7 +267,7 @@ static void imu_task(void *pvParameters) {
         }
         read_fails = 0;
 
-        // Process calibration sample collection
+        // Process calibration sampling
         if (collecting != REQ_NONE) {
             const int16_t v[6] = { raw.ax, raw.ay, raw.az, raw.gx, raw.gy, raw.gz };
             for (int i = 0; i < 6; i++) {
@@ -321,7 +287,7 @@ static void imu_task(void *pvParameters) {
             if (n >= CAL_SAMPLES) {
                 bool gyro_still = true;
                 for (int i = 3; i < 6; i++) {
-                    if ((mx[i] - mn[i]) > GYRO_STILL_RANGE_LSB) gyro_still = false;
+                    if ((mx[i] - mn[i]) > CAL_GYRO_RANGE_LSB) gyro_still = false;
                 }
 
                 if (collecting == REQ_GYRO) {
@@ -340,7 +306,7 @@ static void imu_task(void *pvParameters) {
                 } else {
                     bool accel_still = true;
                     for (int i = 0; i < 3; i++) {
-                        if ((mx[i] - mn[i]) > ACCEL_STILL_RANGE_LSB) accel_still = false;
+                        if ((mx[i] - mn[i]) > CAL_ACCEL_RANGE_LSB) accel_still = false;
                     }
                     float mean_ax = (float)(sum[0] / n) / MPU6050_ACCEL_LSB_PER_G;
                     float mean_ay = (float)(sum[1] / n) / MPU6050_ACCEL_LSB_PER_G;
@@ -349,11 +315,10 @@ static void imu_task(void *pvParameters) {
 
                     if (!gyro_still || !accel_still) {
                         notify_result(kind, false, "Sensor moved. Keep it still and retry");
-                    } else if (total_mag < 0.75f || total_mag > 1.25f) {
+                    } else if (total_mag < 0.70f || total_mag > 1.30f) {
                         notify_result(kind, false, "Invalid acceleration. Keep sensor resting still");
                     } else {
-                        // Multi-axis stationary calibration: identifies gravity axis automatically
-                        // Works whether resting standing upright on pins (+X=1g) or flat (+Z=1g)
+                        // Multi-axis stationary calibration: auto-detects dominant gravity axis
                         float max_comp = fabsf(mean_ax);
                         int axis = 0; // 0=X, 1=Y, 2=Z
                         if (fabsf(mean_ay) > max_comp) { max_comp = fabsf(mean_ay); axis = 1; }
@@ -381,7 +346,7 @@ static void imu_task(void *pvParameters) {
             continue;
         }
 
-        // Convert raw to engineering units and remove calibrated biases
+        // Convert raw values and subtract calibrated offsets
         float ax = (float)raw.ax / MPU6050_ACCEL_LSB_PER_G - cal.accel_bias[0];
         float ay = (float)raw.ay / MPU6050_ACCEL_LSB_PER_G - cal.accel_bias[1];
         float az = (float)raw.az / MPU6050_ACCEL_LSB_PER_G - cal.accel_bias[2];
@@ -390,104 +355,87 @@ static void imu_task(void *pvParameters) {
         float gz = (float)raw.gz / MPU6050_GYRO_LSB_PER_DPS - cal.gyro_bias[2];
         float temp_c = (float)raw.temp / 340.0f + 36.53f;
 
-        float gx_f = (fabsf(gx) < GYRO_DEADBAND_DPS) ? 0.0f : gx;
-        float gy_f = (fabsf(gy) < GYRO_DEADBAND_DPS) ? 0.0f : gy;
-        float gz_f = (fabsf(gz) < GYRO_DEADBAND_DPS) ? 0.0f : gz;
-
         float dt = (float)(now_us - last_us) / 1000000.0f;
         last_us = now_us;
         if (dt < 0.001f) dt = 0.001f;
         if (dt > 0.05f) dt = 0.05f;
 
-        // Quaternion Complementary Filter (Mahony algorithm - completely gimbal-lock free)
+        // Detect if sensor is resting stationary on the desk
         float a_mag = sqrtf(ax * ax + ay * ay + az * az);
-        float gx_rad = gx_f * DEG2RAD;
-        float gy_rad = gy_f * DEG2RAD;
-        float gz_rad = gz_f * DEG2RAD;
+        float g_mag = sqrtf(gx * gx + gy * gy + gz * gz);
+        bool instant_still = (g_mag < STILL_GYRO_DPS) && (fabsf(a_mag - 1.0f) < STILL_ACCEL_TOL_G);
+
+        if (instant_still) {
+            if (still_counter < STILL_CONFIRM_TICKS) still_counter++;
+            else s_is_still = true;
+        } else {
+            still_counter = 0;
+            s_is_still = false;
+        }
+
+        // When stationary, clamp gyro rates to zero and softly adapt zero-bias
+        if (s_is_still) {
+            gx = 0.0f;
+            gy = 0.0f;
+            gz = 0.0f;
+        }
+
+        // Upright coordinate frame (standing on pins: +X up, +Y right, +Z outward):
+        //   Roll: lean left/right  (measured by ay vs ax, gyro gz)
+        //   Pitch: tilt forward/back (measured by az vs ax, gyro gy)
+        //   Yaw: twist on desk    (integrated from gyro gx)
+        float acc_roll  = atan2f(ay, ax) * RAD2DEG;
+        float acc_pitch = atan2f(-az, sqrtf(ax * ax + ay * ay)) * RAD2DEG;
 
         if (!initialized) {
-            if (a_mag > 0.8f && a_mag < 1.2f) {
-                // Initialize quaternion aligned directly with measured gravity vector
-                float ax_n = ax / a_mag, ay_n = ay / a_mag, az_n = az / a_mag;
-                // Target: map [0, 0, 1] to [ax_n, ay_n, az_n]
-                float dot_val = az_n;
-                if (dot_val > 0.9999f) {
-                    q[0] = 1.0f; q[1] = 0.0f; q[2] = 0.0f; q[3] = 0.0f;
-                } else if (dot_val < -0.9999f) {
-                    q[0] = 0.0f; q[1] = 1.0f; q[2] = 0.0f; q[3] = 0.0f;
-                } else {
-                    float s = sqrtf(2.0f * (1.0f + dot_val));
-                    q[0] = 0.5f * s;
-                    q[1] = -ay_n / s;
-                    q[2] =  ax_n / s;
-                    q[3] = 0.0f;
+            roll = acc_roll;
+            pitch = acc_pitch;
+            yaw = 0.0f;
+            initialized = true;
+        } else {
+            if (s_is_still) {
+                // When still on desk, gently relax toward accelerometer gravity angle (no jitter)
+                roll  += 0.02f * wrap180(acc_roll - roll);
+                pitch += 0.02f * wrap180(acc_pitch - pitch);
+                // Zero-yaw drift clamp: do not integrate gyro while still
+            } else {
+                // Moving: integrate gyro rates with complementary accelerometer correction
+                roll  += gz * dt;
+                pitch += gy * dt;
+                yaw   += gx * dt;
+
+                if (a_mag > 0.85f && a_mag < 1.15f) {
+                    roll  += 0.04f * wrap180(acc_roll - roll);
+                    pitch += 0.04f * wrap180(acc_pitch - pitch);
                 }
-                initialized = true;
             }
-        } else {
-            // Accel correction
-            if (a_mag > 0.8f && a_mag < 1.2f) {
-                float ax_n = ax / a_mag, ay_n = ay / a_mag, az_n = az / a_mag;
-                // Estimated gravity direction in body frame from quaternion
-                float vx = 2.0f * (q[1] * q[3] - q[0] * q[2]);
-                float vy = 2.0f * (q[0] * q[1] + q[2] * q[3]);
-                float vz = q[0] * q[0] - q[1] * q[1] - q[2] * q[2] + q[3] * q[3];
-
-                // Error is cross product of measured gravity and estimated gravity
-                float ex = (ay_n * vz - az_n * vy);
-                float ey = (az_n * vx - ax_n * vz);
-                float ez = (ax_n * vy - ay_n * vx);
-
-                gx_rad += MAHONY_KP * ex;
-                gy_rad += MAHONY_KP * ey;
-                gz_rad += MAHONY_KP * ez;
-            }
-
-            // Integrate quaternion rate of change
-            float qw = q[0], qx = q[1], qy = q[2], qz = q[3];
-            float dq0 = 0.5f * (-qx * gx_rad - qy * gy_rad - qz * gz_rad);
-            float dq1 = 0.5f * ( qw * gx_rad + qy * gz_rad - qz * gy_rad);
-            float dq2 = 0.5f * ( qw * gy_rad - qx * gz_rad + qz * gx_rad);
-            float dq3 = 0.5f * ( qw * gz_rad + qx * gy_rad - qy * gx_rad);
-
-            q[0] += dq0 * dt;
-            q[1] += dq1 * dt;
-            q[2] += dq2 * dt;
-            q[3] += dq3 * dt;
-
-            // Re-normalize quaternion
-            float q_len = sqrtf(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);
-            if (q_len > 0.0f) {
-                q[0] /= q_len; q[1] /= q_len; q[2] /= q_len; q[3] /= q_len;
-            }
+            roll = wrap180(roll);
+            pitch = wrap180(pitch);
+            yaw = wrap180(yaw);
         }
 
-        // Calculate attitude RELATIVE to neutral stored orientation
-        float q_rel[4];
-        if (cal.neutral_ok) {
-            float q_neut_inv[4];
-            quat_conj(cal.neutral_q, q_neut_inv);
-            quat_mult(q_neut_inv, q, q_rel);
-        } else {
-            memcpy(q_rel, q, sizeof(q_rel));
-        }
+        // Output pose relative to stored neutral pose
+        float out_r = wrap180(roll - cal.neutral_angles[0]);
+        float out_p = wrap180(pitch - cal.neutral_angles[1]);
+        float out_y = wrap180(yaw - cal.neutral_angles[2]);
 
-        float r_deg = 0.0f, p_deg = 0.0f, y_deg = 0.0f;
-        quat_to_euler_deg(q_rel, &r_deg, &p_deg, &y_deg);
-        y_deg -= yaw_offset_deg;
-        while (y_deg > 180.0f) y_deg -= 360.0f;
-        while (y_deg < -180.0f) y_deg += 360.0f;
+        // Snap near-zero values to 0.0 when resting still on table
+        if (s_is_still) {
+            if (fabsf(out_r) < 0.25f) out_r = 0.0f;
+            if (fabsf(out_p) < 0.25f) out_p = 0.0f;
+            if (fabsf(out_y) < 0.25f) out_y = 0.0f;
+        }
 
         imu_pose_t out;
-        out.roll  = r_deg;
-        out.pitch = p_deg;
-        out.yaw   = y_deg;
+        out.roll  = out_r;
+        out.pitch = out_p;
+        out.yaw   = out_y;
         out.ax = ax; out.ay = ay; out.az = az;
         out.gx = gx; out.gy = gy; out.gz = gz;
         out.temp = temp_c;
         publish_pose(&out, now_us);
 
-        // BLE Telemetry at 20 Hz
+        // Send 20 Hz BLE telemetry
         if (++tele_div >= TELEMETRY_DIV) {
             tele_div = 0;
             if (s_stream && ble_server_is_connected()) {

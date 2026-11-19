@@ -17,6 +17,7 @@ const Scene3D = (function () {
   let dragY = 0;
   let pinch = {};
   let running = false;
+  let isStationary = false;
 
   // Displayed (smoothed) orientation, target orientation
   const shown = { roll: 0, pitch: 0, yaw: 0 };
@@ -54,7 +55,7 @@ const Scene3D = (function () {
   function rotY(a) { const c = Math.cos(a), s = Math.sin(a); return [c, 0, s, 0, 1, 0, -s, 0, c]; }
   function rotZ(a) { const c = Math.cos(a), s = Math.sin(a); return [c, -s, 0, s, c, 0, 0, 0, 1]; }
 
-  // Orientation relative to the standing neutral pose
+  // Upright standing frame: Yaw rotates around Z, Pitch rotates around Y, Roll rotates around X
   function eulerToR(rollDeg, pitchDeg, yawDeg) {
     return mm(rotZ(yawDeg * DEG), mm(rotY(pitchDeg * DEG), rotX(rollDeg * DEG)));
   }
@@ -96,7 +97,6 @@ const Scene3D = (function () {
     return faces.map(f => ({ pts: f.map(i => v[i]), color }));
   }
 
-  // Prism / cylinder whose axis is the local Y axis
   function prismPolys(center, R, radius, halfLen, sides, color) {
     const ring = [];
     for (let i = 0; i < sides; i++) {
@@ -209,10 +209,9 @@ const Scene3D = (function () {
   // Real GY-521 8-Pin breakout geometry standing upright on its pins
   function buildImuBoard(R) {
     const polys = [];
-    // Standing upright: center is elevated so the bottom pins touch the ground plane
     const o = [0, 0, 0.4];
 
-    // Main PCB (Dark Blue GY-521 board): Width across Y = 2.1, Height along Z = 1.6, Thickness = 0.08
+    // Main PCB (Dark Blue GY-521 board)
     polys.push(...withOutward(boxPolys(o, R, [0.04, 1.05, 0.8], [18, 55, 115]), o));
 
     // Two Top Mounting Holes
@@ -221,15 +220,15 @@ const Scene3D = (function () {
       polys.push(...withOutward(prismPolys(hole, mm(R, rotY(Math.PI / 2)), 0.12, 0.05, 12, [212, 175, 55]), hole));
     }
 
-    // Central MPU-6050 IC chip (Matte dark grey package)
+    // Central MPU-6050 IC chip
     const chipC = add(o, mv(R, [0.06, 0.0, 0.0]));
     polys.push(...withOutward(boxPolys(chipC, R, [0.03, 0.32, 0.32], [28, 32, 38]), chipC));
 
-    // IC Pin 1 Orientation Dot (Silver dot on the top corner)
+    // IC Pin 1 Orientation Dot
     const dotC = add(o, mv(R, [0.09, -0.22, 0.22]));
     polys.push(...withOutward(boxPolys(dotC, R, [0.01, 0.04, 0.04], [220, 220, 220]), dotC));
 
-    // Green Power LED (as glowing in photos)
+    // Green Power LED
     const ledC = add(o, mv(R, [0.06, 0.65, -0.2]));
     polys.push(...withOutward(boxPolys(ledC, R, [0.03, 0.08, 0.08], [34, 197, 94]), ledC));
 
@@ -237,17 +236,15 @@ const Scene3D = (function () {
     const regC = add(o, mv(R, [0.06, 0.0, 0.52]));
     polys.push(...withOutward(boxPolys(regC, R, [0.02, 0.18, 0.12], [47, 55, 69]), regC));
 
-    // Black plastic pin header along the bottom edge (Z = -0.8)
+    // Black plastic pin header along bottom edge
     const headerC = add(o, mv(R, [-0.12, 0.0, -0.8]));
     polys.push(...withOutward(boxPolys(headerC, R, [0.12, 1.02, 0.12], [15, 23, 42]), headerC));
 
-    // 8 Right-Angle Bent Pins (1:VCC, 2:GND, 3:SCL, 4:SDA, 5:XDA, 6:XCL, 7:AD0, 8:INT)
+    // 8 Right-Angle Bent Pins
     for (let i = 0; i < 8; i++) {
       const yPos = -0.875 + i * 0.25;
-      // Horizontal pin leg extending backward
       const pinLeg = add(o, mv(R, [-0.3, yPos, -0.8]));
       polys.push(...withOutward(boxPolys(pinLeg, R, [0.15, 0.035, 0.035], [234, 179, 8]), pinLeg));
-      // Vertical pin leg pointing down to table
       const pinFoot = add(o, mv(R, [-0.45, yPos, -1.1]));
       polys.push(...withOutward(boxPolys(pinFoot, R, [0.035, 0.035, 0.3], [234, 179, 8]), pinFoot));
     }
@@ -304,6 +301,8 @@ const Scene3D = (function () {
       while (d > 180) d -= 360;
       while (d < -180) d += 360;
     }
+    // Snap tightly when stationary to prevent phantom visual creep
+    if (isStationary && Math.abs(d) < 0.2) return tgt;
     return cur + d * 0.35;
   }
 
@@ -419,7 +418,8 @@ const Scene3D = (function () {
     }
   }
 
-  function setOrientation(roll, pitch, yaw) {
+  function setOrientation(roll, pitch, yaw, still = false) {
+    isStationary = still;
     target.roll = roll;
     target.pitch = pitch;
     target.yaw = yaw;

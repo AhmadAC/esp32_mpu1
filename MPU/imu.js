@@ -1,6 +1,6 @@
 // MPU-6050 telemetry, calibration and motion-control UI.
 // Protocol lines from the ESP32 (comma separated key=value unless noted):
-//   IMU:roll,pitch,yaw,ax,ay,az,gx,gy,gz,temp
+//   IMU:roll,pitch,yaw,ax,ay,az,gx,gy,gz,temp,still=0|1
 //   MPUHW:ok=1,addr=104
 //   MPUCAL:gyro=1,accel=1,nr=0.0,np=0.0,ny=0.0,gbx=..,gby=..,gbz=..,abx=..,aby=..,abz=..
 //   MPUCALPROG:kind=gyro,pct=50
@@ -9,7 +9,7 @@
 
 const IMU_STALE_MS = 1500;
 
-let imuData = { roll: 0, pitch: 0, yaw: 0, ax: 0, ay: 0, az: 0, gx: 0, gy: 0, gz: 0, temp: 0 };
+let imuData = { roll: 0, pitch: 0, yaw: 0, ax: 0, ay: 0, az: 0, gx: 0, gy: 0, gz: 0, temp: 0, still: true };
 let imuLastPacketMs = 0;
 let imuPacketTimes = [];
 let imuHwOk = null;
@@ -46,9 +46,16 @@ function fmtSigned(v, digits) {
 
 function handleImuLine(text) {
   if (text.startsWith("IMU:")) {
-    const v = text.substring(4).split(",").map(Number);
+    const parts = text.substring(4).split(",");
+    const v = parts.slice(0, 10).map(Number);
     if (v.length >= 10 && v.every(n => isFinite(n))) {
-      applyImuTelemetry(v);
+      let isStill = false;
+      for (let i = 10; i < parts.length; i++) {
+        if (parts[i].startsWith("still=")) {
+          isStill = parts[i].substring(6).trim() === "1";
+        }
+      }
+      applyImuTelemetry(v, isStill);
     }
     return true;
   }
@@ -100,15 +107,21 @@ function handleImuLine(text) {
   return false;
 }
 
-function applyImuTelemetry(v) {
-  imuData = { roll: v[0], pitch: v[1], yaw: v[2], ax: v[3], ay: v[4], az: v[5], gx: v[6], gy: v[7], gz: v[8], temp: v[9] };
+function applyImuTelemetry(v, still) {
+  imuData = {
+    roll: v[0], pitch: v[1], yaw: v[2],
+    ax: v[3], ay: v[4], az: v[5],
+    gx: v[6], gy: v[7], gz: v[8],
+    temp: v[9], still: still
+  };
+
   const now = Date.now();
   imuLastPacketMs = now;
   imuPacketTimes.push(now);
   while (imuPacketTimes.length > 0 && now - imuPacketTimes[0] > 1000) imuPacketTimes.shift();
 
   if (typeof Scene3D !== "undefined") {
-    Scene3D.setOrientation(imuData.roll, imuData.pitch, imuData.yaw);
+    Scene3D.setOrientation(imuData.roll, imuData.pitch, imuData.yaw, still);
   }
   renderImuReadouts();
 }
@@ -138,7 +151,7 @@ function renderImuLinkBadge() {
     text = "Sensor not found";
     cls = "chip chip-bad";
   } else if (imuLastPacketMs > 0 && age < IMU_STALE_MS) {
-    text = `${imuPacketTimes.length} Hz`;
+    text = imuData.still ? "Stationary (Locked)" : `${imuPacketTimes.length} Hz Active`;
     cls = "chip chip-ok";
   } else {
     text = "No IMU data";

@@ -81,3 +81,101 @@ BLE TELEMETRY LINES (ESP32 -> app):
 - MPUCALRES:kind=gyro,ok=1,msg=Gyro bias saved
 - MPUCTRL:on=1,gain=2.00,er=1,ep=1,ey=0,ir=0,ip=0,iy=0
 ================================================================================
+
+
+1. File Label for Each Code Block (in order of your screenshot)
+
+    Block 1 (Ini): sdkconfig.defaults
+
+    Block 2 (C++): main/ble_server.cpp
+
+    Block 3 (C++): main/main.cpp
+
+    Block 4 (C++): main/imu.cpp
+
+    Block 5 (JavaScript): Arm/scene3d.js
+
+    Block 6 (JavaScript): Arm/imu.js
+
+2. Calibration Settings Explained
+Button / Command	What It Actually Does	Physical Requirement	How Often to Do It
+Calibrate Gyro (mpu_cal gyro)	Measures the natural drift rate of the gyroscope over 2 seconds and stores the zero-rate bias in flash memory.	Sensor must be completely still on the table (do not touch it).	Once. Saved permanently in ESP32 flash memory.
+Calibrate Accel (mpu_cal accel)	Samples Earth's 1.0g gravity vector for 2 seconds and calculates accelerometer zero-offsets. Automatically identifies gravity direction in the upright standing pose.	Sensor must rest stationary on its pins.	Once. Saved permanently in ESP32 flash memory.
+Set Neutral (mpu_cal neutral)	Takes the current pose of the board and locks it as
+
+        
+(0.0∘,0.0∘,0.0∘)
+(0.0∘,0.0∘,0.0∘)
+
+      
+
+. This is the reference pose where the arm servos center at 90°.	Hold or stand the sensor in the exact pose you want as the "center".	Whenever you want to reset the zero pose.
+Zero Yaw (mpu_cal yaw)	Resets only the Yaw angle to
+
+        
+0.0∘
+0.0∘
+
+      
+
+at the current heading without touching Roll or Pitch.	Any position.	Quick tap if heading drifted after lots of rotation.
+Clear All (mpu_cal clear)	Erases all calibration offsets from flash back to factory uncalibrated state.	None.	Only if you want to wipe everything and start from scratch.
+3. What You Really Need to Do to Get It Working
+
+To get reliable, drift-free tracking, perform this simple 3-step sequence once:
+
+    Step 1 — Stand the Board on Its Pins
+    Place the GY-521 board standing upright on its pins on your desk so it is completely still. Do not touch it or bump the table.
+
+    Step 2 — Calibrate Gyro, then Accel
+
+        Tap Calibrate Gyro. Wait 2 seconds until the badge turns green (Gyro: calibrated).
+
+        Tap Calibrate Accel. Wait 2 seconds until the badge turns green (Accel: calibrated).
+        (Both biases are now written into the ESP32's flash memory and persist through power cycles).
+
+    Step 3 — Tap "Set Neutral"
+
+        With the sensor standing upright, tap Set Neutral.
+
+        The readouts will snap to Roll: 0.0°, Pitch: 0.0°, Yaw: 0.0°.
+
+Once this is done:
+
+    When the board sits still on your desk, the stillness lock freezes all motion so it will not move or drift at all.
+
+    When you pick up the board and tilt it forward, backward, left, or right, the 3D model and arm servos track the movement in real time.
+
+    Calibrate gyro first just leave it still
+
+
+    Tape it down firmly so it doesn't budge or wobble when you press buttons on your phone/computer.
+
+Take your hands completely off the board and table.
+
+Tap Calibrate Gyro (mpu_cal gyro)
+
+        
+→
+→
+
+      
+
+wait 2 seconds for the green badge / success message.
+
+Tap Calibrate Accel (mpu_cal accel)
+
+        
+→
+→
+
+      
+
+wait 2 seconds for the green badge / success message.
+(At this point, both gyro and accelerometer zero-offsets are permanently written to the ESP32's flash memory.)
+
+Now you can untape it (or pick it up).
+
+Hold or position the board in the exact physical orientation you want to be your "Center / Home" position (where the arm servos point straight at 90°).
+
+While holding it in that exact center pose, tap Set Neutral (mpu_cal neutral).

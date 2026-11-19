@@ -213,10 +213,8 @@ static int ble_gap_event(struct ble_gap_event *event, void *arg) {
             s_rx_line_len = 0;
             portEXIT_CRITICAL(&s_rx_mux);
 
-            // Configure power for connection handle
             esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_CONN_HDL0, ESP_PWR_LVL_P3);
 
-            // Request iOS-compatible connection interval & 4s supervision timeout for battery resilience
             struct ble_gap_upd_params conn_params = {};
             conn_params.itvl_min = 24;              // 30 ms
             conn_params.itvl_max = 48;              // 60 ms
@@ -301,7 +299,6 @@ static void ble_advertise(void) {
     memset(&adv_params, 0, sizeof(adv_params));
     adv_params.conn_mode = BLE_GAP_CONN_MODE_UND;
     adv_params.disc_mode = BLE_GAP_DISC_MODE_GEN;
-    // Set 100ms - 200ms advertising interval: vastly reduces surge draw on battery power
     adv_params.itvl_min = 0x00A0; // 100 ms
     adv_params.itvl_max = 0x0140; // 200 ms
 
@@ -334,7 +331,6 @@ static void ble_on_sync(void) {
         s_own_addr_type = BLE_OWN_ADDR_PUBLIC;
     }
 
-    // Set balanced RF TX power to +3dBm to avoid high inrush battery brownout
     esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_DEFAULT, ESP_PWR_LVL_P3);
     esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_ADV, ESP_PWR_LVL_P3);
 
@@ -351,6 +347,9 @@ void ble_server_init(ble_cmd_callback_t cmd_handler) {
     s_cmd_queue = xQueueCreate(12, BLE_CMD_MAX_LEN);
     s_rx_flush_timer = xTimerCreate("ble_rx_flush", pdMS_TO_TICKS(60), pdFALSE, NULL, rx_flush_timer_cb);
     xTaskCreatePinnedToCore(ble_cmd_exec_task, "ble_cmd_task", 4096, NULL, 5, NULL, 1);
+
+    // Suppress internal NimBLE notify INFO spam that floods the terminal
+    esp_log_level_set("NimBLE", ESP_LOG_WARN);
 
     esp_err_t ret = nimble_port_init();
     if (ret != ESP_OK) {

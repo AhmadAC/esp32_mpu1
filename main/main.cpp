@@ -14,7 +14,10 @@
 static const char *TAG = "APP_MAIN";
 
 extern "C" void app_main(void) {
-    // Immediately clamp servo signal pins LOW before anything else so floating pins never twitch servos
+    // Silence high-frequency NimBLE stack notify logging on console
+    esp_log_level_set("NimBLE", ESP_LOG_WARN);
+
+    // Clamp servo signal pins LOW before anything else so floating pins never twitch servos
     const gpio_num_t servo_pins[SERVO_COUNT] = { SERVO_1_PIN, SERVO_2_PIN, SERVO_3_PIN };
     for (int i = 0; i < SERVO_COUNT; i++) {
         gpio_reset_pin(servo_pins[i]);
@@ -33,7 +36,7 @@ extern "C" void app_main(void) {
 
     ESP_LOGI(TAG, "Booting YD-ESP32-S3 3-Servo MP90S Arm Controller + MPU-6050 (reset_reason=%d)...", (int)rst);
 
-    // 1. Flash Storage (NVS) for servo trim, programmable actions and MPU calibration
+    // 1. Flash Storage (NVS)
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_ERROR_CHECK(nvs_flash_erase());
@@ -44,10 +47,10 @@ extern "C" void app_main(void) {
     // 2. Command Processor Subsystem
     command_processor_init();
 
-    // 3. Bluetooth Low Energy NUS Server ('ESP32S3-Arm') initialized BEFORE servo PWM
+    // 3. Bluetooth Low Energy NUS Server ('ESP32S3-Arm')
     ble_server_init(command_on_ble_received);
 
-    // 4. 3-Servo LEDC PWM Controller (starts DETACHED / duty=0 on Claw=GP1, Arm=GP38, Shoulder=GP39)
+    // 4. 3-Servo LEDC PWM Controller (starts DETACHED on Claw=GP1, Arm=GP38, Shoulder=GP39)
     servo_controller_init();
 
     // 5. MPU-6050 IMU (I2C: SDA=GP8, SCL=GP9) with fusion, calibration and BLE telemetry

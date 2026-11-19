@@ -21,6 +21,10 @@ CONFIG_BT_ENABLED=y
 CONFIG_BT_NIMBLE_ENABLED=y
 CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1
 
+# Silence NimBLE notification INFO spam (GATT procedure notify logs)
+CONFIG_BT_NIMBLE_LOG_LEVEL_INFO=n
+CONFIG_BT_NIMBLE_LOG_LEVEL_WARNING=y
+
 # Brownout detector threshold (Level 0 ~2.4V prevents resets during battery RF current peaks)
 CONFIG_ESP_BROWNOUT_DET=y
 CONFIG_ESP_BROWNOUT_DET_LVL_SEL_0=y
