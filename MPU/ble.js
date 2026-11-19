@@ -528,7 +528,7 @@ function handleIncomingBleData(rawText, sourceTag = "BLE") {
     const text = line.trim();
     if (!text) return;
 
-    if (!text.startsWith("ANG:") && !text.startsWith("STATUS:") && !text.startsWith("SERVO_EN:") &&
+    if (!text.startsWith("STATUS:") && !text.startsWith("SERVO_EN:") &&
         !text.startsWith("IMU:") && !text.startsWith("MPUCALPROG:") && !text.startsWith("ESPNOW:")) {
       appendLog(sourceTag, text);
     }

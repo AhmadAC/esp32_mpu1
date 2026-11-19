@@ -34,6 +34,24 @@ static bool parse_bool_arg(const char *s) {
     return (strcasecmp(s, "on") == 0 || strcmp(s, "1") == 0 || strcasecmp(s, "true") == 0);
 }
 
+// Determines if a command is a manual positioning command that should override automatic MPU control
+static bool is_manual_motion_cmd(const char *cmd) {
+    if (!cmd) return false;
+    if ((cmd[0] == 's' || cmd[0] == 'S') && (cmd[1] >= '1' && cmd[1] <= '3')) return true;
+    if (strncmp(cmd, "move", 4) == 0) return true;
+    if (strncmp(cmd, "set", 3) == 0) return true;
+    if (strncmp(cmd, "claw", 4) == 0) return true;
+    if (strncmp(cmd, "arm", 3) == 0 && (cmd[3] == ' ' || cmd[3] == '\0')) return true;
+    if (strncmp(cmd, "shoulder", 8) == 0) return true;
+    if (strncmp(cmd, "nudge", 5) == 0) return true;
+    if (strcmp(cmd, "home") == 0 || strcmp(cmd, "center") == 0) return true;
+    if (strcmp(cmd, "stop") == 0) return true;
+    if (strncmp(cmd, "action_run", 10) == 0 || strncmp(cmd, "run ", 4) == 0) return true;
+    if (strncmp(cmd, "action_loop", 11) == 0 || strncmp(cmd, "loop ", 5) == 0) return true;
+    if (strncmp(cmd, "seq", 3) == 0) return true;
+    return false;
+}
+
 #if NODE_IS_SENDER
 static void release_mpu_control(command_print_fn_t print_fn) {
     if (mpu_control_is_enabled()) {
@@ -194,7 +212,16 @@ void command_process(const char *cmd_line, command_print_fn_t print_fn) {
 
     if (strncmp(p, "mpu_ctrl ", 9) == 0) {
         bool en = parse_bool_arg(p + 9);
-        if (en && !imu_has_sensor()) {
+        if (!imu_has_sensor()) {
+#if NODE_IS_RECEIVER
+            // If connected to Arm Receiver and user taps MPU Control, forward to MPU Sender
+            if (espnow_sync_is_paired()) {
+                espnow_sync_send_cmd(p);
+                print_fn(en ? ">> [ESP-NOW Forwarded] MPU Motion Control ON\n"
+                            : ">> [ESP-NOW Forwarded] MPU Motion Control OFF\n");
+                return;
+            }
+#endif
             print_fn(">> Error: MPU-6050 not detected. Check wiring.\n");
             mpu_control_set_enabled(false);
         } else {
@@ -235,8 +262,11 @@ void command_process(const char *cmd_line, command_print_fn_t print_fn) {
     }
 
 #if NODE_IS_SENDER
-    // On MPU Sender: forward arm motion, joint angles, and programmable actions over ESP-NOW to Receiver
-    release_mpu_control(print_fn);
+    // On MPU Sender: if an explicit manual arm movement command arrives, temporarily release MPU control
+    if (is_manual_motion_cmd(p)) {
+        release_mpu_control(print_fn);
+    }
+
     if (espnow_sync_is_paired()) {
         espnow_sync_send_cmd(p);
         print_fn(">> [ESP-NOW Forwarded] ");

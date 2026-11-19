@@ -15,10 +15,17 @@
 #include "esp_idf_version.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/queue.h"
 
 static const char *TAG = "ESPNOW_SYNC";
 
 static const uint8_t BCAST_MAC[6] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
+
+typedef struct {
+    uint8_t src_mac[6];
+    int8_t rssi;
+    espnow_packet_t pkt;
+} espnow_rx_item_t;
 
 static espnow_role_t s_local_role = ESPNOW_ROLE_RECEIVER;
 static uint8_t s_local_mac[6] = {0};
@@ -30,6 +37,7 @@ static uint16_t s_tx_seq = 0;
 
 static espnow_cmd_handler_t s_cmd_handler = NULL;
 static portMUX_TYPE s_mux = portMUX_INITIALIZER_UNLOCKED;
+static QueueHandle_t s_espnow_rx_queue = NULL;
 
 // Cached status on MPU Sender received from Arm Receiver
 static int  s_cached_s1 = 90, s_cached_s2 = 90, s_cached_s3 = 90;
@@ -68,11 +76,8 @@ static bool send_packet(const uint8_t *dest_mac, espnow_packet_t *pkt) {
     return (err == ESP_OK);
 }
 
-static void handle_incoming_packet(const uint8_t *src_mac, const uint8_t *data, size_t len, int8_t rssi) {
-    if (len < sizeof(espnow_packet_t)) return;
-
-    const espnow_packet_t *pkt = (const espnow_packet_t *)data;
-    if (pkt->magic != ESPNOW_MAGIC) return;
+static void process_incoming_packet(const espnow_rx_item_t *item) {
+    const espnow_packet_t *pkt = &item->pkt;
 
     // Discard packets originating from self
     if (memcmp(pkt->sender_mac, s_local_mac, 6) == 0) return;
@@ -81,7 +86,7 @@ static void handle_incoming_packet(const uint8_t *src_mac, const uint8_t *data, 
     if (pkt->sender_role == (uint8_t)s_local_role) return;
 
     s_last_recv_us = esp_timer_get_time();
-    s_last_rssi = rssi;
+    s_last_rssi = item->rssi;
 
     add_or_update_peer(pkt->sender_mac);
 
@@ -143,11 +148,18 @@ static void handle_incoming_packet(const uint8_t *src_mac, const uint8_t *data, 
             char cmd_copy[ESPNOW_PAYLOAD_CMD_SZ + 1];
             strncpy(cmd_copy, pkt->payload.cmd_str.cmd, ESPNOW_PAYLOAD_CMD_SZ);
             cmd_copy[ESPNOW_PAYLOAD_CMD_SZ] = '\0';
-            ESP_LOGI(TAG, "Wireless command received: '%s'", cmd_copy);
+            ESP_LOGI(TAG, "Executing wireless command in worker task: '%s'", cmd_copy);
 
             if (s_cmd_handler != NULL) {
                 s_cmd_handler(cmd_copy);
             }
+        } else if (s_local_role == ESPNOW_ROLE_SENDER) {
+            // Forwarded commands received on Sender from Arm (e.g. mpu_ctrl on)
+            char cmd_copy[ESPNOW_PAYLOAD_CMD_SZ + 1];
+            strncpy(cmd_copy, pkt->payload.cmd_str.cmd, ESPNOW_PAYLOAD_CMD_SZ);
+            cmd_copy[ESPNOW_PAYLOAD_CMD_SZ] = '\0';
+            ESP_LOGI(TAG, "Executing remote MPU command from Arm: '%s'", cmd_copy);
+            command_process(cmd_copy, ble_server_send_notify);
         }
         break;
     }
@@ -186,12 +198,13 @@ static void handle_incoming_packet(const uint8_t *src_mac, const uint8_t *data, 
 
             char status_line[160];
             snprintf(status_line, sizeof(status_line),
-                     "STATUS:s1=%d,s2=%d,s3=%d,o1=%d,o2=%d,o3=%d,en1=%d,en2=%d,en3=%d,idle=%d,run=%d,act=%d,loop=%d,bo=0,mpuc=1,mpuok=1\n",
+                     "STATUS:s1=%d,s2=%d,s3=%d,o1=%d,o2=%d,o3=%d,en1=%d,en2=%d,en3=%d,idle=%d,run=%d,act=%d,loop=%d,bo=0,mpuc=%d,mpuok=1\n",
                      s_cached_s1, s_cached_s2, s_cached_s3,
                      s_cached_o1, s_cached_o2, s_cached_o3,
                      s_cached_e1 ? 1 : 0, s_cached_e2 ? 1 : 0, s_cached_e3 ? 1 : 0,
                      s_cached_idle ? 1 : 0, s_cached_run ? 1 : 0,
-                     s_cached_slot, s_cached_loop ? 1 : 0);
+                     s_cached_slot, s_cached_loop ? 1 : 0,
+                     mpu_control_is_enabled() ? 1 : 0);
             ble_server_send_notify(status_line);
         }
         break;
@@ -202,16 +215,38 @@ static void handle_incoming_packet(const uint8_t *src_mac, const uint8_t *data, 
     }
 }
 
+static void espnow_rx_task(void *pvParameters) {
+    (void)pvParameters;
+    espnow_rx_item_t item;
+
+    while (1) {
+        if (xQueueReceive(s_espnow_rx_queue, &item, portMAX_DELAY) == pdTRUE) {
+            process_incoming_packet(&item);
+        }
+    }
+}
+
 #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 1, 0)
 static void espnow_recv_cb(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
-    if (!info || !data || len <= 0) return;
-    int8_t rssi = (info->rx_ctrl != NULL) ? info->rx_ctrl->rssi : 0;
-    handle_incoming_packet(info->src_addr, data, (size_t)len, rssi);
+    if (!info || !data || len < (int)sizeof(espnow_packet_t) || s_espnow_rx_queue == NULL) return;
+    espnow_rx_item_t item;
+    memcpy(item.src_mac, info->src_addr, 6);
+    item.rssi = (info->rx_ctrl != NULL) ? info->rx_ctrl->rssi : 0;
+    memcpy(&item.pkt, data, sizeof(espnow_packet_t));
+    if (item.pkt.magic == ESPNOW_MAGIC) {
+        xQueueSend(s_espnow_rx_queue, &item, 0);
+    }
 }
 #else
 static void espnow_recv_cb(const uint8_t *mac_addr, const uint8_t *data, int len) {
-    if (!mac_addr || !data || len <= 0) return;
-    handle_incoming_packet(mac_addr, data, (size_t)len, 0);
+    if (!mac_addr || !data || len < (int)sizeof(espnow_packet_t) || s_espnow_rx_queue == NULL) return;
+    espnow_rx_item_t item;
+    memcpy(item.src_mac, mac_addr, 6);
+    item.rssi = 0;
+    memcpy(&item.pkt, data, sizeof(espnow_packet_t));
+    if (item.pkt.magic == ESPNOW_MAGIC) {
+        xQueueSend(s_espnow_rx_queue, &item, 0);
+    }
 }
 #endif
 
@@ -289,6 +324,8 @@ void espnow_sync_init(espnow_role_t role) {
     s_is_paired = false;
     memset(s_peer_mac, 0, 6);
 
+    s_espnow_rx_queue = xQueueCreate(16, sizeof(espnow_rx_item_t));
+
     esp_err_t ret = esp_netif_init();
     if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
         ESP_ERROR_CHECK(ret);
@@ -308,7 +345,7 @@ void espnow_sync_init(espnow_role_t role) {
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_start());
 
-    // Disable modem power save to ensure RF is always active for ESP-NOW packets
+    // Disable modem power save to ensure RF is active for all ESP-NOW packets
     ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
     ESP_ERROR_CHECK(esp_wifi_set_channel(ESPNOW_CHANNEL, WIFI_SECOND_CHAN_NONE));
     ESP_ERROR_CHECK(esp_wifi_get_mac(WIFI_IF_STA, s_local_mac));
@@ -319,6 +356,7 @@ void espnow_sync_init(espnow_role_t role) {
 
     add_or_update_peer(BCAST_MAC);
 
+    xTaskCreatePinnedToCore(espnow_rx_task, "espnow_rx_task", 6144, NULL, 5, NULL, 1);
     xTaskCreatePinnedToCore(espnow_sync_task, "espnow_task", 4096, NULL, 4, NULL, 1);
 
     ESP_LOGI(TAG, "ESP-NOW Auto-Sync initialized (Role=%s, MAC=%02X:%02X:%02X:%02X:%02X:%02X, CH=%d)",

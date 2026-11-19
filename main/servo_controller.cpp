@@ -282,7 +282,7 @@ static void auto_idle_monitor_task(void *pvParameters) {
 
         if (!s_auto_idle || s_seq_running) continue;
 
-        int64_t now_us = esp_timer_get_time();
+        int64_now_us = esp_timer_get_time();
         bool any_enabled = false;
         int64_t last_us = 0;
 
@@ -309,7 +309,7 @@ void servo_controller_init(void) {
     ledc_timer.clk_cfg          = LEDC_AUTO_CLK;
     ESP_ERROR_CHECK(ledc_timer_config(&ledc_timer));
 
-    // Keep LEDC attached with duty=0 so pins stay steady LOW until explicitly enabled
+    // Initialize LEDC channels with 0 duty
     for (int i = 0; i < SERVO_COUNT; i++) {
         s_enabled[i] = false;
         ledc_channel_config_t ledc_ch = {};
