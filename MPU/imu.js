@@ -1,11 +1,12 @@
-// MPU-6050 telemetry, calibration and motion-control UI.
-// Protocol lines from the ESP32 (comma separated key=value unless noted):
+// MPU-6050 telemetry, calibration, motion-control and ESP-NOW wireless status UI.
+// Protocol lines from the ESP32:
 //   IMU:roll,pitch,yaw,ax,ay,az,gx,gy,gz,temp,still=0|1
 //   MPUHW:ok=1,addr=104
 //   MPUCAL:gyro=1,accel=1,nr=0.0,np=0.0,ny=0.0,gbx=..,gby=..,gbz=..,abx=..,aby=..,abz=..
 //   MPUCALPROG:kind=gyro,pct=50
 //   MPUCALRES:kind=gyro,ok=1,msg=Gyro bias saved
 //   MPUCTRL:on=1,gain=2.00,er=1,ep=1,ey=0,ir=0,ip=0,iy=0
+//   ESPNOW:paired=1,peer=AA:BB:CC:DD:EE:FF,rssi=-45,role=SENDER
 
 const IMU_STALE_MS = 1500;
 
@@ -17,6 +18,9 @@ let imuCal = { gyro: false, accel: false, nr: 0, np: 0, ny: 0, busy: "" };
 let imuCtrl = { on: false, gain: 2, axes: [true, true, false], inv: [false, false, false] };
 let imuGainDragging = false;
 let imuGainTimer = null;
+
+// ESP-NOW link tracking
+let espnowState = { paired: false, peer: "--:--:--:--:--:--", rssi: 0, role: "Unknown" };
 
 const IMU_AXIS_ROWS = [
   { key: "roll", label: "Roll", target: "Arm (S2)" },
@@ -42,6 +46,54 @@ function fmtSigned(v, digits) {
   const n = Number(v);
   if (!isFinite(n)) return "--";
   return (n >= 0 ? "+" : "") + n.toFixed(digits);
+}
+
+function handleEspNowLine(text) {
+  if (!text.startsWith("ESPNOW:")) return false;
+  const kv = parseKv(text.substring(7));
+  const wasPaired = espnowState.paired;
+  espnowState.paired = (kv.paired === "1");
+  espnowState.peer = kv.peer || "--:--:--:--:--:--";
+  espnowState.rssi = parseInt(kv.rssi, 10) || 0;
+  espnowState.role = kv.role || "Unknown";
+
+  renderEspNowState();
+
+  if (!wasPaired && espnowState.paired) {
+    showToast(`ESP-NOW auto-paired with ${espnowState.peer}`, "success");
+    appendLog("ESPNOW", `Paired with ${espnowState.peer} (RSSI: ${espnowState.rssi} dBm)`);
+  } else if (wasPaired && !espnowState.paired) {
+    showToast("ESP-NOW peer link lost. Auto-discovering...", "warn");
+    appendLog("ESPNOW", "Link lost. Scanning for peer beacon...");
+  }
+  return true;
+}
+
+function renderEspNowState() {
+  const badge = document.getElementById("espnow-badge");
+  const roleEl = document.getElementById("espnow-role-val");
+  const peerEl = document.getElementById("espnow-peer-val");
+  const rssiEl = document.getElementById("espnow-rssi-val");
+
+  if (badge) {
+    if (espnowState.paired) {
+      badge.innerText = "Paired & Linked";
+      badge.className = "chip chip-ok";
+    } else {
+      badge.innerText = "Auto-Discovering...";
+      badge.className = "chip chip-warn";
+    }
+  }
+
+  if (roleEl) {
+    roleEl.innerText = espnowState.role === "SENDER" ? "MPU Sender" : (espnowState.role === "RECEIVER" ? "Arm Receiver" : espnowState.role);
+  }
+  if (peerEl) {
+    peerEl.innerText = espnowState.peer;
+  }
+  if (rssiEl) {
+    rssiEl.innerText = espnowState.paired ? `${espnowState.rssi} dBm` : "-- dBm";
+  }
 }
 
 function handleImuLine(text) {
@@ -343,6 +395,13 @@ function onImuLinkLost() {
   setCalButtonsDisabled(false);
 }
 
+function onEspNowLinkLost() {
+  espnowState.paired = false;
+  espnowState.peer = "--:--:--:--:--:--";
+  espnowState.rssi = 0;
+  renderEspNowState();
+}
+
 function initImuUI() {
   buildAxisRows();
   renderCtrlState();
@@ -350,6 +409,7 @@ function initImuUI() {
   renderImuReadouts();
   renderImuLinkBadge();
   renderCalProgress(-1);
+  renderEspNowState();
   setSceneMode("imu");
   if (typeof Scene3D !== "undefined") {
     Scene3D.init(document.getElementById("scene-canvas"));

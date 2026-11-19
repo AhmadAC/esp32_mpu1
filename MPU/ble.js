@@ -72,15 +72,22 @@ function getBleBackend() {
 function initBackendUI() {
   const backend = getBleBackend();
   const badge = document.getElementById("backend-badge");
-  if (!backend) { badge.innerText = "No BLE"; return; }
+  if (!backend) {
+    if (badge) badge.innerText = "No BLE";
+    return;
+  }
   if (backend.type === "capacitor") {
     bleBackend = "capacitor";
-    badge.innerText = "iOS CoreBLE";
-    badge.style.color = "#6ee7b7";
+    if (badge) {
+      badge.innerText = "iOS CoreBLE";
+      badge.style.color = "#6ee7b7";
+    }
   } else {
     bleBackend = "web-bluetooth";
-    badge.innerText = "Web BLE";
-    badge.style.color = "#7dd3fc";
+    if (badge) {
+      badge.innerText = "Web BLE";
+      badge.style.color = "#7dd3fc";
+    }
   }
 }
 
@@ -273,9 +280,10 @@ function onConnectedSuccess(name) {
 
   setTimeout(() => {
     sendCommand("status");
-    setTimeout(() => sendCommand("action_get"), 300);
-    setTimeout(() => sendCommand("mpu_get"), 700);
-    setTimeout(() => sendCommand("mpu on"), 900);
+    setTimeout(() => sendCommand("espnow_get"), 250);
+    setTimeout(() => sendCommand("action_get"), 500);
+    setTimeout(() => sendCommand("mpu_get"), 750);
+    setTimeout(() => sendCommand("mpu on"), 1000);
     setTimeout(async () => {
       if (isConnected && rxCount === 0) {
         await tryFallbackBleRead();
@@ -312,6 +320,9 @@ async function onDisconnectedCleanup() {
   if (typeof onImuLinkLost === "function") {
     onImuLinkLost();
   }
+  if (typeof onEspNowLinkLost === "function") {
+    onEspNowLinkLost();
+  }
 }
 
 function getCoalesceKey(cmd) {
@@ -332,7 +343,6 @@ async function sendCommand(commandText) {
     return;
   }
 
-  // Replace stale queued slider/offset commands for the same servo so BLE never backs up
   const key = getCoalesceKey(commandText);
   if (key !== null) {
     for (let i = cmdQueue.length - 1; i >= 0; i--) {
@@ -477,7 +487,8 @@ function universalBleDecode(val) {
           hexDecoded.includes("CAL:") || hexDecoded.includes("ACT:") ||
           hexDecoded.includes("ACT_STATE:") || hexDecoded.includes("SERVO_EN:") ||
           hexDecoded.includes("AUTO_IDLE:") || hexDecoded.includes("IMU:") ||
-          hexDecoded.includes("MPUCAL:") || hexDecoded.includes(">>"))) {
+          hexDecoded.includes("MPUCAL:") || hexDecoded.includes("ESPNOW:") ||
+          hexDecoded.includes(">>"))) {
         return hexDecoded;
       }
     }
@@ -489,7 +500,7 @@ function universalBleDecode(val) {
           b64Decoded.includes("CAL:") || b64Decoded.includes("ACT:") ||
           b64Decoded.includes("ACT_STATE:") || b64Decoded.includes("SERVO_EN:") ||
           b64Decoded.includes("AUTO_IDLE:") || b64Decoded.includes("IMU:") ||
-          b64Decoded.includes("MPUCAL:"))) {
+          b64Decoded.includes("MPUCAL:") || b64Decoded.includes("ESPNOW:"))) {
         return b64Decoded;
       }
     } catch (e) {}
@@ -515,8 +526,15 @@ function handleIncomingBleData(rawText, sourceTag = "BLE") {
     if (!text) return;
 
     if (!text.startsWith("ANG:") && !text.startsWith("STATUS:") && !text.startsWith("SERVO_EN:") &&
-        !text.startsWith("IMU:") && !text.startsWith("MPUCALPROG:")) {
+        !text.startsWith("IMU:") && !text.startsWith("MPUCALPROG:") && !text.startsWith("ESPNOW:")) {
       appendLog(sourceTag, text);
+    }
+
+    if (text.startsWith("ESPNOW:")) {
+      if (typeof handleEspNowLine === "function") {
+        handleEspNowLine(text);
+      }
+      return;
     }
 
     if (typeof handleImuLine === "function" && handleImuLine(text)) {
@@ -647,6 +665,7 @@ function appendLog(sender, text) {
   if (sender === "NOTIF" || sender === "WEB-BLE" || sender === "READ") senderColor = "#34d399";
   if (sender === "Action") senderColor = "#c084fc";
   if (sender === "Trim" || sender === "Calibration" || sender === "MPU") senderColor = "#f59e0b";
+  if (sender === "ESPNOW") senderColor = "#a855f7";
   if (sender.includes("Error") || sender.includes("Warn")) senderColor = "#f87171";
   if (sender === "TX") senderColor = "#fbbf24";
 

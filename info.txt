@@ -1,181 +1,83 @@
 ================================================================================
-              YD-ESP32-S3 3-SERVO ARM + MPU-6050 HARDWARE PINOUT MAPPING
+          YD-ESP32-S3 DUAL-NODE WIRELESS ROBOTIC ARM SYSTEM (ESP-NOW)
 ================================================================================
 
-1. MP90S SERVO MOTOR WIRING (3-AXIS SERVO ARM):
+1. ARCHITECTURAL OVERVIEW:
 --------------------------------------------------------------------------------
-Servo Channel   Joint           YD-ESP32-S3 Pin     Notes
-Common GND      Ground          GND                 Common Ground (Share w/ PSU)
-Servo Power     5V Power        External 5V         5V 2A+ external supply recommended
-Servo 1 (S1)    Claw (Gripper)  GPIO 1              50Hz LEDC PWM (550-2450us)
-Servo 2 (S2)    Arm             GPIO 38             50Hz LEDC PWM (550-2450us)
-Servo 3 (S3)    Shoulder        GPIO 39             50Hz LEDC PWM (550-2450us)
+The system is partitioned across two identical YD-ESP32-S3 N16R8 boards connected
+over an ad-hoc, low-latency (<5ms) ESP-NOW wireless link:
+
+NODE 1: MPU SENDER (Motion Controller)
+- Sensors: GY-521 MPU-6050 6-Axis IMU connected via I2C (SDA GPIO 8, SCL GPIO 9)
+- Firmware Image: build_out/esp32s3_mpu_sender.bin
+- Functions: Computes 6-axis complementary orientation fusion, runs stationary
+  noise locking, performs multi-axis calibration, pairs automatically with the Arm
+  Receiver via ESP-NOW discovery, hosts BLE for the iOS / Web interface, and
+  transmits wireless motion vectors.
+
+NODE 2: ARM RECEIVER (Actuator Controller)
+- Actuators: 3 MP90S servos for 3-DOF Arm (Claw GPIO 1, Arm GPIO 38, Shoulder GPIO 39)
+- Firmware Image: build_out/esp32s3_arm_receiver.bin
+- Functions: Receives wireless motion packets, drives 50Hz LEDC PWM channels,
+  executes smooth sinusoidal easing, handles auto-idle motor detaching, and executes
+  stored programmable actions.
 
 
-2. MPU-6050 (GY-521 8-PIN BREAKOUT) IMU WIRING (I2C):
+2. HARDWARE WIRING SPECIFICATION:
 --------------------------------------------------------------------------------
-Pin  MPU-6050 Pin   YD-ESP32-S3 Pin     Function / Connection Details
-1    VCC            3.3V                Power supply (3.3V logic level matched)
-2    GND            GND                 Common Ground (shared with ESP32 and PSU)
-3    SCL            GPIO 9              I2C0 Serial Clock (SCL)
-4    SDA            GPIO 8              I2C0 Serial Data (SDA)
-5    XDA            Not Connected       Auxiliary I2C data (secondary compass bus only)
-6    XCL            Not Connected       Auxiliary I2C clock (secondary compass bus only)
-7    AD0            GND                 I2C Address Select: GND = 0x68 (3.3V = 0x69)
-8    INT            Not Connected       Hardware interrupt (unused; 200Hz polling used)
+A. MPU SENDER BOARD:
+   Pin   MPU-6050 Pin   YD-ESP32-S3 Pin     Function
+   1     VCC            3.3V                3.3V Power
+   2     GND            GND                 Common Ground
+   3     SCL            GPIO 9              I2C0 Clock
+   4     SDA            GPIO 8              I2C0 Data
+   7     AD0            GND                 I2C Address 0x68 (3.3V = 0x69)
 
-The PS2 joystick (GPIO 2, 3, 4) is no longer used and can be unwired.
-
-Sensor axes (chip facing up, board flat): X = right, Y = forward, Z = up.
-Orientation convention (right-hand rule): roll = about X, pitch = about Y, yaw = about Z.
-
-MPU CONTROL BEHAVIOR (MPU Control ON):
-- Roll  tilt -> Servo 2 (Arm,      GPIO 38)
-- Pitch tilt -> Servo 3 (Shoulder, GPIO 39)
-- Yaw   twist -> Servo 1 (Claw,    GPIO 1)   (disabled by default; yaw is gyro-integrated and drifts)
-- servo_angle = 90 +/- sensitivity * tilt_deg, where tilt is measured from the saved neutral pose.
-- Each axis can be enabled/disabled and inverted from the app.
-- home, stop, detach, move, set, seq and action commands release MPU control automatically.
-
-CALIBRATION (from the app or serial):
-1. Calibrate Gyro   (mpu_cal gyro)    : sensor still, ~2 s, stores gyro bias in flash
-2. Calibrate Accel  (mpu_cal accel)   : sensor flat, chip up, still, ~2 s, stores accel bias
-3. Set Neutral      (mpu_cal neutral) : current pose becomes the center (servos at 90)
-4. Zero Yaw         (mpu_cal yaw)     : current heading becomes yaw 0
-5. Clear            (mpu_cal clear)   : erase all MPU calibration
+B. ARM RECEIVER BOARD:
+   Servo Channel   Joint           YD-ESP32-S3 Pin     Notes
+   Common GND      Ground          GND                 Shared Ground with 5V PSU
+   Servo Power     5V Power        External 5V         5V 2A+ external supply
+   Servo 1 (S1)    Claw (Gripper)  GPIO 1              50Hz LEDC PWM (550-2450us)
+   Servo 2 (S2)    Arm             GPIO 38             50Hz LEDC PWM (550-2450us)
+   Servo 3 (S3)    Shoulder        GPIO 39             50Hz LEDC PWM (550-2450us)
 
 
-3. BLUETOOTH LOW ENERGY (BLE) SPECIFICATION:
+3. AUTOMATIC ZERO-INTERVENTION ESP-NOW DISCOVERY & PAIRING:
 --------------------------------------------------------------------------------
-Device Advertised Name:     ESP32S3-Arm
-GATT Service (NUS):         6e400001-b5a3-f393-e0a9-e50e24dcca9e
-RX Characteristic (Write):  6e400002-b5a3-f393-e0a9-e50e24dcca9e
-TX Characteristic (Notify): 6e400003-b5a3-f393-e0a9-e50e24dcca9e
+1. Channel: Both boards operate on 2.4GHz Wi-Fi Channel 1 (WIFI_IF_STA).
+2. Protocol Magic: 0x59444152 ("YDAR")
+3. Discovery Cycle:
+   - On boot, both boards initialize Wi-Fi in Station mode with software coexistence enabled.
+   - The Sender and Receiver broadcast periodic discovery beacons.
+   - When a beacon from the complementary role is detected, unicast MACs are registered in
+     the hardware peer table and a two-way handshake completes in under 1 second.
+   - If either board powers down or moves out of range, the link times out after 3.5s and
+     automatically resumes scanning until reconnected. Zero user input required.
 
 
-4. BLE & USB SERIAL COMMAND REFERENCE:
+4. GITHUB ACTIONS MULTI-TARGET WORKFLOW:
 --------------------------------------------------------------------------------
-- s1 <0-180> / s2 <0-180> / s3 <0-180> : Move individual servo immediately
-- claw <0-180|open|close>             : Control Claw (GPIO 1)
-- arm <0-180>                          : Control Arm (GPIO 38)
-- shoulder <0-180>                     : Control Shoulder (GPIO 39)
-- set <s1> <s2> <s3>                   : Move all 3 servos immediately
-- move <s1> <s2> <s3> [ms]             : Smoothly ease all 3 servos over duration
-- home                                 : Smoothly move all 3 servos to 90 deg
-- stop                                 : Stop any running action or loop (releases MPU control)
-- status                               : Query live angles, offsets, run state
-- mpu <on|off>                         : Start/stop IMU telemetry over BLE (20 Hz)
-- mpu_read                             : Print one IMU line (USB serial debugging)
-- mpu_get                              : Print MPU hardware, calibration and control state
-- mpu_cal <gyro|accel|neutral|yaw|clear> : Calibrate the MPU-6050
-- mpu_ctrl <on|off>                    : Let the MPU-6050 control the arm
-- mpu_gain <0.5-4.0> [save]            : Sensitivity (servo degrees per degree of tilt)
-- mpu_axes <r> <p> <y>                 : Enable axes (0 or 1 each)
-- mpu_inv <r> <p> <y>                  : Invert axes (0 or 1 each)
+The `.github/workflows/build.yml` runs a dual-pass build:
+1. `idf.py -B build_receiver -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.receiver" build`
+   -> Produces `esp32s3_arm_receiver.bin`
+2. `idf.py -B build_sender -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.sender" build`
+   -> Produces `esp32s3_mpu_sender.bin`
+3. Generates unified `manifest.json` for WebSerial flashing with both target options.
 
-BLE TELEMETRY LINES (ESP32 -> app):
-- IMU:roll,pitch,yaw,ax,ay,az,gx,gy,gz,temp
-- MPUHW:ok=1,addr=104
-- MPUCAL:gyro=1,accel=1,nr=..,np=..,ny=..,gbx=..,gby=..,gbz=..,abx=..,aby=..,abz=..
-- MPUCALPROG:kind=gyro,pct=50
-- MPUCALRES:kind=gyro,ok=1,msg=Gyro bias saved
-- MPUCTRL:on=1,gain=2.00,er=1,ep=1,ey=0,ir=0,ip=0,iy=0
+
+5. COMMAND REFERENCE (BLE & SERIAL REPL):
+--------------------------------------------------------------------------------
+- espnow                               : Display wireless link state, peer MAC, and RSSI
+- mpu <on|off>                         : Toggle 20 Hz IMU telemetry stream over BLE
+- mpu_ctrl <on|off>                    : Enable/disable wireless MPU-to-Arm tracking
+- mpu_cal <gyro|accel|neutral|yaw|clear>: Calibrate MPU sensors
+- claw <0-180|open|close>              : Set Claw angle
+- arm <0-180> / shoulder <0-180>       : Move Arm or Shoulder
+- s1 <deg> / s2 <deg> / s3 <deg>       : Move individual joint
+- set <s1> <s2> <s3>                   : Set all 3 angles immediately
+- move <s1> <s2> <s3> [ms]             : Smoothly move all 3 joints over duration
+- home                                 : Move all 3 joints to neutral (90 deg)
+- stop                                 : Halt motion and release MPU control
+- detach                               : Disconnect PWM signal to relax servos
+- status                               : Query full system state
 ================================================================================
-
-
-1. File Label for Each Code Block (in order of your screenshot)
-
-    Block 1 (Ini): sdkconfig.defaults
-
-    Block 2 (C++): main/ble_server.cpp
-
-    Block 3 (C++): main/main.cpp
-
-    Block 4 (C++): main/imu.cpp
-
-    Block 5 (JavaScript): Arm/scene3d.js
-
-    Block 6 (JavaScript): Arm/imu.js
-
-2. Calibration Settings Explained
-Button / Command	What It Actually Does	Physical Requirement	How Often to Do It
-Calibrate Gyro (mpu_cal gyro)	Measures the natural drift rate of the gyroscope over 2 seconds and stores the zero-rate bias in flash memory.	Sensor must be completely still on the table (do not touch it).	Once. Saved permanently in ESP32 flash memory.
-Calibrate Accel (mpu_cal accel)	Samples Earth's 1.0g gravity vector for 2 seconds and calculates accelerometer zero-offsets. Automatically identifies gravity direction in the upright standing pose.	Sensor must rest stationary on its pins.	Once. Saved permanently in ESP32 flash memory.
-Set Neutral (mpu_cal neutral)	Takes the current pose of the board and locks it as
-
-        
-(0.0∘,0.0∘,0.0∘)
-(0.0∘,0.0∘,0.0∘)
-
-      
-
-. This is the reference pose where the arm servos center at 90°.	Hold or stand the sensor in the exact pose you want as the "center".	Whenever you want to reset the zero pose.
-Zero Yaw (mpu_cal yaw)	Resets only the Yaw angle to
-
-        
-0.0∘
-0.0∘
-
-      
-
-at the current heading without touching Roll or Pitch.	Any position.	Quick tap if heading drifted after lots of rotation.
-Clear All (mpu_cal clear)	Erases all calibration offsets from flash back to factory uncalibrated state.	None.	Only if you want to wipe everything and start from scratch.
-3. What You Really Need to Do to Get It Working
-
-To get reliable, drift-free tracking, perform this simple 3-step sequence once:
-
-    Step 1 — Stand the Board on Its Pins
-    Place the GY-521 board standing upright on its pins on your desk so it is completely still. Do not touch it or bump the table.
-
-    Step 2 — Calibrate Gyro, then Accel
-
-        Tap Calibrate Gyro. Wait 2 seconds until the badge turns green (Gyro: calibrated).
-
-        Tap Calibrate Accel. Wait 2 seconds until the badge turns green (Accel: calibrated).
-        (Both biases are now written into the ESP32's flash memory and persist through power cycles).
-
-    Step 3 — Tap "Set Neutral"
-
-        With the sensor standing upright, tap Set Neutral.
-
-        The readouts will snap to Roll: 0.0°, Pitch: 0.0°, Yaw: 0.0°.
-
-Once this is done:
-
-    When the board sits still on your desk, the stillness lock freezes all motion so it will not move or drift at all.
-
-    When you pick up the board and tilt it forward, backward, left, or right, the 3D model and arm servos track the movement in real time.
-
-    Calibrate gyro first just leave it still
-
-
-    Tape it down firmly so it doesn't budge or wobble when you press buttons on your phone/computer.
-
-Take your hands completely off the board and table.
-
-Tap Calibrate Gyro (mpu_cal gyro)
-
-        
-→
-→
-
-      
-
-wait 2 seconds for the green badge / success message.
-
-Tap Calibrate Accel (mpu_cal accel)
-
-        
-→
-→
-
-      
-
-wait 2 seconds for the green badge / success message.
-(At this point, both gyro and accelerometer zero-offsets are permanently written to the ESP32's flash memory.)
-
-Now you can untape it (or pick it up).
-
-Hold or position the board in the exact physical orientation you want to be your "Center / Home" position (where the arm servos point straight at 90°).
-
-While holding it in that exact center pose, tap Set Neutral (mpu_cal neutral).

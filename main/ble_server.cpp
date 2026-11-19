@@ -1,6 +1,9 @@
 #include "ble_server.h"
+#include "node_config.h"
 #include "servo_controller.h"
 #include "command_processor.h"
+#include "espnow_sync.h"
+
 #include <string.h>
 #include <stdio.h>
 #include "esp_log.h"
@@ -18,7 +21,6 @@
 #include "services/gatt/ble_svc_gatt.h"
 
 static const char *TAG = "BLE_SERVER";
-static const char *DEVICE_NAME = "ESP32S3-Arm";
 
 #define BLE_CMD_MAX_LEN 512
 
@@ -212,7 +214,6 @@ static int ble_gap_event(struct ble_gap_event *event, void *arg) {
             s_rx_line_len = 0;
             portEXIT_CRITICAL(&s_rx_mux);
 
-            // Request iOS-compatible connection interval & 4s supervision timeout for battery resilience
             struct ble_gap_upd_params conn_params = {};
             conn_params.itvl_min = 24;              // 30 ms
             conn_params.itvl_max = 48;              // 60 ms
@@ -241,8 +242,12 @@ static int ble_gap_event(struct ble_gap_event *event, void *arg) {
                 char msg[BLE_CMD_MAX_LEN];
                 snprintf(msg, sizeof(msg), "status");
                 xQueueSend(s_cmd_queue, msg, 0);
+                snprintf(msg, sizeof(msg), "espnow_get");
+                xQueueSend(s_cmd_queue, msg, 0);
+#if NODE_IS_SENDER
                 snprintf(msg, sizeof(msg), "mpu_get");
                 xQueueSend(s_cmd_queue, msg, 0);
+#endif
             }
         }
         return 0;
@@ -274,8 +279,8 @@ static void ble_advertise(void) {
 
     memset(&fields, 0, sizeof(fields));
     fields.flags = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;
-    fields.name = (uint8_t *)DEVICE_NAME;
-    fields.name_len = strlen(DEVICE_NAME);
+    fields.name = (uint8_t *)BLE_DEVICE_NAME;
+    fields.name_len = strlen(BLE_DEVICE_NAME);
     fields.name_is_complete = 1;
 
     rc = ble_gap_adv_set_fields(&fields);
@@ -305,7 +310,7 @@ static void ble_advertise(void) {
     if (rc != 0 && rc != BLE_HS_EALREADY) {
         ESP_LOGE(TAG, "Error starting advertising: rc=%d", rc);
     } else {
-        ESP_LOGI(TAG, "Advertising BLE service as '%s'...", DEVICE_NAME);
+        ESP_LOGI(TAG, "Advertising BLE service as '%s'...", BLE_DEVICE_NAME);
     }
 }
 
@@ -343,7 +348,6 @@ void ble_server_init(ble_cmd_callback_t cmd_handler) {
     s_rx_flush_timer = xTimerCreate("ble_rx_flush", pdMS_TO_TICKS(60), pdFALSE, NULL, rx_flush_timer_cb);
     xTaskCreatePinnedToCore(ble_cmd_exec_task, "ble_cmd_task", 6144, NULL, 5, NULL, 1);
 
-    // Suppress internal NimBLE notify INFO spam that floods the terminal
     esp_log_level_set("NimBLE", ESP_LOG_WARN);
 
     esp_err_t ret = nimble_port_init();
@@ -358,7 +362,7 @@ void ble_server_init(ble_cmd_callback_t cmd_handler) {
 
     ble_svc_gap_init();
     ble_svc_gatt_init();
-    ble_svc_gap_device_name_set(DEVICE_NAME);
+    ble_svc_gap_device_name_set(BLE_DEVICE_NAME);
 
     int rc = ble_gatts_count_cfg(gatt_svr_svcs);
     if (rc != 0) {
@@ -373,7 +377,7 @@ void ble_server_init(ble_cmd_callback_t cmd_handler) {
     }
 
     nimble_port_freertos_init(ble_host_task);
-    ESP_LOGI(TAG, "BLE Server ready ('%s' Nordic UART Service)", DEVICE_NAME);
+    ESP_LOGI(TAG, "BLE Server ready ('%s' Nordic UART Service)", BLE_DEVICE_NAME);
 }
 
 bool ble_server_is_connected(void) {

@@ -1,3 +1,4 @@
+
 .panel {
   border-radius: 16px;
   padding: 12px;
@@ -53,6 +54,46 @@
   background: rgba(239, 68, 68, 0.18);
   color: #f87171;
   border-color: rgba(239, 68, 68, 0.4);
+}
+
+/* ESP-NOW Wireless Mesh Panel Styles */
+.espnow-panel {
+  border-color: rgba(168, 85, 247, 0.45);
+  background: rgba(15, 23, 42, 0.55);
+}
+
+.espnow-details-row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+
+.espnow-detail-box {
+  background: rgba(15, 23, 42, 0.75);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  padding: 6px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.espnow-detail-box .lbl {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: rgba(255, 255, 255, 0.5);
+  font-weight: 700;
+}
+
+.espnow-detail-box .val {
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 11px;
+  font-weight: 700;
+  color: #c084fc;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .seg {

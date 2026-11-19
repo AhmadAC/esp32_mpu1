@@ -1,8 +1,11 @@
 #include "command_processor.h"
+#include "node_config.h"
 #include "servo_controller.h"
 #include "imu.h"
 #include "mpu_control.h"
+#include "espnow_sync.h"
 #include "ble_server.h"
+
 #include "esp_system.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -31,8 +34,6 @@ static bool parse_bool_arg(const char *s) {
     return (strcasecmp(s, "on") == 0 || strcmp(s, "1") == 0 || strcasecmp(s, "true") == 0);
 }
 
-// Any command that drives the servos on its own (home, actions, move, stop, detach) takes the
-// arm back from the MPU so the two controllers never fight each other.
 static void release_mpu_control(command_print_fn_t print_fn) {
     if (mpu_control_is_enabled()) {
         mpu_control_set_enabled(false);
@@ -41,26 +42,38 @@ static void release_mpu_control(command_print_fn_t print_fn) {
 }
 
 void command_processor_init(void) {
-    ESP_LOGI(TAG, "Command Processor Initialized (Claw: GPIO 1, Arm: GPIO 38, Shoulder: GPIO 39)");
+    ESP_LOGI(TAG, "Command Processor Initialized for [%s]", NODE_ROLE_NAME);
 }
 
 size_t command_build_status(char *buf, size_t len) {
     int s1 = 90, s2 = 90, s3 = 90;
     int o1 = 0, o2 = 0, o3 = 0;
     bool e1 = false, e2 = false, e3 = false;
+    bool auto_idle = false;
+    bool is_running = false;
+    bool is_looping = false;
+    int  active_slot = 0;
+
+#if NODE_IS_RECEIVER
     servo_get_all_angles(&s1, &s2, &s3);
     servo_get_all_offsets(&o1, &o2, &o3);
     servo_get_all_enabled(&e1, &e2, &e3);
+    auto_idle = servo_get_auto_idle();
+    is_running = servo_is_sequence_running();
+    is_looping = servo_is_sequence_looping();
+    active_slot = servo_get_active_slot();
+#endif
+
     int brownout = (esp_reset_reason() == ESP_RST_BROWNOUT) ? 1 : 0;
 
     int n = snprintf(buf, len,
                      "STATUS:s1=%d,s2=%d,s3=%d,o1=%d,o2=%d,o3=%d,en1=%d,en2=%d,en3=%d,idle=%d,run=%d,act=%d,loop=%d,bo=%d,mpuc=%d,mpuok=%d\n",
                      s1, s2, s3, o1, o2, o3,
                      e1 ? 1 : 0, e2 ? 1 : 0, e3 ? 1 : 0,
-                     servo_get_auto_idle() ? 1 : 0,
-                     servo_is_sequence_running() ? 1 : 0,
-                     servo_get_active_slot(),
-                     servo_is_sequence_looping() ? 1 : 0,
+                     auto_idle ? 1 : 0,
+                     is_running ? 1 : 0,
+                     active_slot,
+                     is_looping ? 1 : 0,
                      brownout,
                      mpu_control_is_enabled() ? 1 : 0,
                      imu_has_sensor() ? 1 : 0);
@@ -73,6 +86,11 @@ void command_notify_status(void) {
     char status_str[256];
     command_build_status(status_str, sizeof(status_str));
     ble_server_send_notify(status_str);
+
+    char espnow_str[128];
+    if (espnow_sync_format_line(espnow_str, sizeof(espnow_str))) {
+        ble_server_send_notify(espnow_str);
+    }
 }
 
 void command_process(const char *cmd_line, command_print_fn_t print_fn) {
@@ -82,9 +100,16 @@ void command_process(const char *cmd_line, command_print_fn_t print_fn) {
     while (*p == ' ' || *p == '\t') p++;
     if (*p == '\0') return;
 
-    // ---------------- MPU-6050 commands ----------------
+    // ---------------- ESP-NOW Query ----------------
+    if (strcmp(p, "espnow_get") == 0 || strcmp(p, "espnow") == 0) {
+        char line[128];
+        if (espnow_sync_format_line(line, sizeof(line))) {
+            print_fn(line);
+        }
+        return;
+    }
 
-    // Telemetry stream: "mpu on" / "mpu off"
+    // ---------------- MPU-6050 commands ----------------
     if (strncmp(p, "mpu ", 4) == 0) {
         const char *arg = p + 4;
         while (*arg == ' ') arg++;
@@ -97,7 +122,6 @@ void command_process(const char *cmd_line, command_print_fn_t print_fn) {
         return;
     }
 
-    // One telemetry line (useful from the USB serial console)
     if (strcmp(p, "mpu_read") == 0) {
         char line[128];
         if (imu_format_line(line, sizeof(line))) {
@@ -108,18 +132,16 @@ void command_process(const char *cmd_line, command_print_fn_t print_fn) {
         return;
     }
 
-    // Hardware + calibration + control state
     if (strcmp(p, "mpu_get") == 0) {
         imu_report_state(print_fn);
         mpu_control_report(print_fn);
         return;
     }
 
-    // Calibration: "mpu_cal <gyro|accel|neutral|yaw|clear>"
     if (strncmp(p, "mpu_cal ", 8) == 0) {
         char kind[16] = {0};
         if (sscanf(p + 8, "%15s", kind) == 1 && imu_request_cal(kind)) {
-            return;  // progress and result arrive asynchronously (MPUCALPROG / MPUCALRES / MPUCAL)
+            return;
         }
         if (!imu_has_sensor()) {
             print_fn("MPUCALRES:kind=none,ok=0,msg=MPU-6050 not detected. Check wiring\n");
@@ -129,7 +151,6 @@ void command_process(const char *cmd_line, command_print_fn_t print_fn) {
         return;
     }
 
-    // Motion control: "mpu_ctrl <on|off>"
     if (strncmp(p, "mpu_ctrl ", 9) == 0) {
         bool en = parse_bool_arg(p + 9);
         if (en && !imu_has_sensor()) {
@@ -142,7 +163,6 @@ void command_process(const char *cmd_line, command_print_fn_t print_fn) {
         return;
     }
 
-    // Sensitivity: "mpu_gain <0.5-4.0> [save]"
     if (strncmp(p, "mpu_gain ", 9) == 0) {
         char val[16] = {0};
         char flag[8] = {0};
@@ -159,7 +179,6 @@ void command_process(const char *cmd_line, command_print_fn_t print_fn) {
         return;
     }
 
-    // Axis enables / inversion: "mpu_axes <r> <p> <y>" and "mpu_inv <r> <p> <y>" (0 or 1 each)
     if (strncmp(p, "mpu_axes ", 9) == 0 || strncmp(p, "mpu_inv ", 8) == 0) {
         bool is_axes = (strncmp(p, "mpu_axes ", 9) == 0);
         int r = 0, pi = 0, y = 0;
@@ -174,9 +193,21 @@ void command_process(const char *cmd_line, command_print_fn_t print_fn) {
         return;
     }
 
-    // ---------------- Named joint controls ----------------
-
-    // "claw <0-180|open|close>"
+#if NODE_IS_SENDER
+    // On the MPU Sender, forward any motion or servo commands over ESP-NOW to the Arm Receiver
+    release_mpu_control(print_fn);
+    if (espnow_sync_is_paired()) {
+        espnow_sync_send_cmd(p);
+        print_fn(">> [ESP-NOW Forwarded to Arm] ");
+        print_fn(p);
+        print_fn("\n");
+        return;
+    } else {
+        print_fn(">> [ESP-NOW Warning] Arm Receiver not paired yet. Waiting for link...\n");
+        return;
+    }
+#else
+    // ---------------- Receiver: Local Servo Execution ----------------
     if (strncmp(p, "claw ", 5) == 0) {
         const char *arg = p + 5;
         int angle = -1;
@@ -217,7 +248,6 @@ void command_process(const char *cmd_line, command_print_fn_t print_fn) {
         }
     }
 
-    // Single servo angle commands: "s1 90", "s2 45", "s3 150"
     if ((p[0] == 's' || p[0] == 'S') && (p[1] >= '1' && p[1] <= '3') && (p[2] == ' ' || p[2] == ':')) {
         int idx = p[1] - '1';
         int angle = atoi(p + 3);
@@ -232,11 +262,9 @@ void command_process(const char *cmd_line, command_print_fn_t print_fn) {
         }
     }
 
-    // Set all 3 servos smoothly: "set <s1> <s2> <s3>"
     if (strncmp(p, "set ", 4) == 0) {
         int s1 = 90, s2 = 90, s3 = 90;
         if (sscanf(p + 4, "%d %d %d", &s1, &s2, &s3) == 3) {
-            release_mpu_control(print_fn);
             servo_set_all(s1, s2, s3);
             char msg[80];
             snprintf(msg, sizeof(msg), "ANG:%d,%d,%d\n", s1, s2, s3);
@@ -247,12 +275,10 @@ void command_process(const char *cmd_line, command_print_fn_t print_fn) {
         return;
     }
 
-    // Smooth move all 3 servos: "move <s1> <s2> <s3> [duration_ms]"
     if (strncmp(p, "move ", 5) == 0) {
         int s1 = 90, s2 = 90, s3 = 90, dur = 400;
         int n = sscanf(p + 5, "%d %d %d %d", &s1, &s2, &s3, &dur);
         if (n >= 3) {
-            release_mpu_control(print_fn);
             servo_move_smooth(s1, s2, s3, dur);
             char msg[80];
             snprintf(msg, sizeof(msg), ">> Moving smoothly to (%d, %d, %d) over %dms\n", s1, s2, s3, dur);
@@ -263,7 +289,6 @@ void command_process(const char *cmd_line, command_print_fn_t print_fn) {
         return;
     }
 
-    // Nudge individual servo: "nudge <s1|s2|s3> <+/-deg>"
     if (strncmp(p, "nudge ", 6) == 0) {
         char tok[8] = {0};
         int delta = 0;
@@ -286,25 +311,19 @@ void command_process(const char *cmd_line, command_print_fn_t print_fn) {
         return;
     }
 
-    // Home / Center all 3 servos to 90 degrees
     if (strcmp(p, "home") == 0 || strcmp(p, "center") == 0) {
-        release_mpu_control(print_fn);
         servo_move_smooth(90, 90, 90, 550);
         print_fn(">> Homing all servos to 90 deg...\n");
         return;
     }
 
-    // Stop active sequence/motion (also releases MPU control)
     if (strcmp(p, "stop") == 0) {
-        release_mpu_control(print_fn);
         servo_stop_motion();
         print_fn(">> Motion stopped.\n");
         return;
     }
 
-    // Detach / disable servo PWM (stops holding current & buzzing)
     if (strcmp(p, "detach") == 0 || strcmp(p, "idle") == 0 || strcmp(p, "disable") == 0) {
-        release_mpu_control(print_fn);
         servo_detach_all();
         print_fn(">> Servos detached (idle, PWM=0).\n");
         return;
@@ -323,14 +342,12 @@ void command_process(const char *cmd_line, command_print_fn_t print_fn) {
         return;
     }
 
-    // Re-attach / enable all servos at current angles
     if (strcmp(p, "attach") == 0 || strcmp(p, "enable") == 0) {
         servo_attach_all();
         print_fn(">> Servos attached (PWM enabled).\n");
         return;
     }
 
-    // Auto-Idle toggle: "autoidle on" / "autoidle off"
     if (strncmp(p, "autoidle ", 9) == 0) {
         bool en = parse_bool_arg(p + 9);
         servo_set_auto_idle(en);
@@ -340,7 +357,6 @@ void command_process(const char *cmd_line, command_print_fn_t print_fn) {
         return;
     }
 
-    // Live calibration trim offset: "offset <s1|s2|s3> <-45..45>"
     if (strncmp(p, "offset ", 7) == 0) {
         char tok[8] = {0};
         int off = 0;
@@ -355,7 +371,6 @@ void command_process(const char *cmd_line, command_print_fn_t print_fn) {
         return;
     }
 
-    // Save all 3 calibration offsets to NVS: "cal_set <o1> <o2> <o3>"
     if (strncmp(p, "cal_set ", 8) == 0) {
         int o1 = 0, o2 = 0, o3 = 0;
         if (sscanf(p + 8, "%d %d %d", &o1, &o2, &o3) == 3) {
@@ -371,7 +386,6 @@ void command_process(const char *cmd_line, command_print_fn_t print_fn) {
         return;
     }
 
-    // Query calibration offsets
     if (strcmp(p, "cal_get") == 0) {
         int o1 = 0, o2 = 0, o3 = 0;
         servo_get_all_offsets(&o1, &o2, &o3);
@@ -381,10 +395,8 @@ void command_process(const char *cmd_line, command_print_fn_t print_fn) {
         return;
     }
 
-    // Run programmable action slot: "action_run <1-8>" or "run <1-8>"
     if (strncmp(p, "action_run ", 11) == 0 || strncmp(p, "run ", 4) == 0) {
         int slot = atoi(strncmp(p, "run ", 4) == 0 ? (p + 4) : (p + 11));
-        release_mpu_control(print_fn);
         if (servo_action_run(slot, false)) {
             char msg[64];
             snprintf(msg, sizeof(msg), ">> Running programmable action %d\n", slot);
@@ -395,10 +407,8 @@ void command_process(const char *cmd_line, command_print_fn_t print_fn) {
         return;
     }
 
-    // Loop programmable action slot: "action_loop <1-8>" or "loop <1-8>"
     if (strncmp(p, "action_loop ", 12) == 0 || strncmp(p, "loop ", 5) == 0) {
         int slot = atoi(strncmp(p, "loop ", 5) == 0 ? (p + 5) : (p + 12));
-        release_mpu_control(print_fn);
         if (servo_action_run(slot, true)) {
             char msg[64];
             snprintf(msg, sizeof(msg), ">> Looping programmable action %d\n", slot);
@@ -409,7 +419,6 @@ void command_process(const char *cmd_line, command_print_fn_t print_fn) {
         return;
     }
 
-    // Save programmable action slot to NVS: "action_set <1-8> <name>|<s1,s2,s3,move,wait;...>"
     if (strncmp(p, "action_set ", 11) == 0) {
         const char *arg = p + 11;
         while (*arg == ' ') arg++;
@@ -428,7 +437,6 @@ void command_process(const char *cmd_line, command_print_fn_t print_fn) {
         return;
     }
 
-    // Query all 8 programmable action slots
     if (strcmp(p, "action_get") == 0) {
         for (int i = 1; i <= ACTION_NUM_SLOTS; i++) {
             char line[ACTION_MAX_LEN + 16];
@@ -439,7 +447,6 @@ void command_process(const char *cmd_line, command_print_fn_t print_fn) {
         return;
     }
 
-    // Reset all programmable actions to factory defaults
     if (strcmp(p, "action_reset") == 0) {
         servo_action_reset_defaults();
         for (int i = 1; i <= ACTION_NUM_SLOTS; i++) {
@@ -452,9 +459,7 @@ void command_process(const char *cmd_line, command_print_fn_t print_fn) {
         return;
     }
 
-    // Run ad-hoc sequence: "seq <s1,s2,s3,move,wait;...>" or "seq_loop <...>"
     if (strncmp(p, "seq_loop ", 9) == 0) {
-        release_mpu_control(print_fn);
         if (servo_run_sequence_str(p + 9, true)) {
             print_fn(">> Looping custom sequence...\n");
         } else {
@@ -463,7 +468,6 @@ void command_process(const char *cmd_line, command_print_fn_t print_fn) {
         return;
     }
     if (strncmp(p, "seq ", 4) == 0) {
-        release_mpu_control(print_fn);
         if (servo_run_sequence_str(p + 4, false)) {
             print_fn(">> Running custom sequence...\n");
         } else {
@@ -471,30 +475,32 @@ void command_process(const char *cmd_line, command_print_fn_t print_fn) {
         }
         return;
     }
+#endif
 
     if (strcmp(p, "status") == 0) {
         char msg[256];
         command_build_status(msg, sizeof(msg));
         print_fn(msg);
+
+        char espnow_str[128];
+        if (espnow_sync_format_line(espnow_str, sizeof(espnow_str))) {
+            print_fn(espnow_str);
+        }
         return;
     }
 
     if (strcmp(p, "help") == 0 || strcmp(p, "?") == 0) {
-        print_fn("3-Servo Arm (Claw=GP1, Arm=GP38, Shoulder=GP39) + MPU-6050 (SDA=GP8, SCL=GP9):\n"
+        print_fn("YD-ESP32-S3 Wireless Arm Controller (ESP-NOW):\n"
+                 "  espnow                               : Print ESP-NOW pairing and RSSI state\n"
                  "  mpu <on|off>                         : BLE telemetry stream\n"
-                 "  mpu_read / mpu_get                   : One IMU line / hardware + calibration state\n"
-                 "  mpu_cal <gyro|accel|neutral|yaw|clear>: Calibrate the MPU-6050\n"
-                 "  mpu_ctrl <on|off>                    : Arm follows the MPU orientation\n"
-                 "  mpu_gain <0.5-4.0> [save]            : Sensitivity (deg of servo per deg of tilt)\n"
-                 "  mpu_axes <r> <p> <y> / mpu_inv <r> <p> <y> : Enable / invert roll, pitch, yaw\n"
-                 "  claw <0-180|open|close>              : Direct Claw command\n"
-                 "  arm <0-180> / shoulder <0-180>       : Move Arm or Shoulder\n"
-                 "  s1 <deg> / s2 <deg> / s3 <deg>       : Move specific servo\n"
-                 "  set <s1> <s2> <s3>                   : Move all 3 servos\n"
-                 "  move <s1> <s2> <s3> [ms]             : Smooth ease all 3\n"
+                 "  mpu_read / mpu_get                   : IMU raw telemetry / state\n"
+                 "  mpu_cal <gyro|accel|neutral|yaw|clear>: Calibrate MPU\n"
+                 "  mpu_ctrl <on|off>                    : Wireless MPU-to-Arm control\n"
+                 "  claw <0-180|open|close>              : Claw gripper\n"
+                 "  arm <0-180> / shoulder <0-180>       : Joint angles\n"
+                 "  s1 <deg> / s2 <deg> / s3 <deg>       : Move individual servo\n"
                  "  home / stop / detach / attach        : Quick control\n"
-                 "  action_run <1-8> / action_loop <1-8> : Saved routine\n"
-                 "  status                               : Print full system state\n");
+                 "  status                               : Full system telemetry\n");
         return;
     }
 

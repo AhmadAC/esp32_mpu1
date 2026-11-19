@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-  <title>ESP32-S3 Servo Arm Control</title>
+  <title>ESP32-S3 Wireless Arm Control (ESP-NOW)</title>
   <link rel="stylesheet" href="style.css">
   <link rel="stylesheet" href="imu.css">
 </head>
@@ -19,7 +19,7 @@
 
   <header style="padding-bottom:8px; border-bottom:1px solid rgba(255,255,255,0.1); display:flex; align-items:center; justify-content:space-between;">
     <div>
-      <h1 style="font-size:1.05rem; font-weight:700; letter-spacing:-0.02em;">Servo Arm Control Center</h1>
+      <h1 style="font-size:1.05rem; font-weight:700; letter-spacing:-0.02em;">Wireless Arm Control Center</h1>
       <div style="display:flex; align-items:center; gap:6px; margin-top:2px;">
         <div id="status-dot" style="width:8px; height:8px; border-radius:9999px; background:#f43f5e; box-shadow:0 0 6px #f43f5e; transition:background 0.2s;"></div>
         <span id="status-text" style="font-size:11px; color:rgba(255,255,255,0.6);">Disconnected</span>
@@ -41,6 +41,37 @@
       </svg>
       <span>Connect BLE</span>
     </button>
+  </div>
+
+  <!-- ESP-NOW Wireless Auto-Discovery Link Banner -->
+  <div class="glass-panel panel espnow-panel">
+    <div class="panel-head">
+      <span class="panel-title" style="color:#a855f7;">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M5 12.55a11 11 0 0 1 14.08 0"></path>
+          <path d="M1.42 9a16 16 0 0 1 21.16 0"></path>
+          <path d="M8.53 16.11a6 6 0 0 1 6.95 0"></path>
+          <line x1="12" y1="20" x2="12.01" y2="20"></line>
+        </svg>
+        ESP-NOW Wireless Mesh
+      </span>
+      <span id="espnow-badge" class="chip chip-warn">Auto-Discovering...</span>
+    </div>
+
+    <div class="espnow-details-row">
+      <div class="espnow-detail-box">
+        <span class="lbl">Role</span>
+        <span class="val" id="espnow-role-val">MPU Sender</span>
+      </div>
+      <div class="espnow-detail-box">
+        <span class="lbl">Peer Arm Node</span>
+        <span class="val" id="espnow-peer-val">--:--:--:--:--:--</span>
+      </div>
+      <div class="espnow-detail-box">
+        <span class="lbl">Signal RSSI</span>
+        <span class="val" id="espnow-rssi-val">-- dBm</span>
+      </div>
+    </div>
   </div>
 
   <main style="flex:1; min-height:0; overflow-y:auto; display:flex; flex-direction:column; gap:12px; padding-right:2px; touch-action:pan-y;" class="no-scrollbar">
@@ -94,7 +125,7 @@
     <div class="glass-panel panel" style="border-color:rgba(245,158,11,0.4);">
       <div class="panel-head">
         <span class="panel-title" style="color:#f59e0b;">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="6"></circle><circle cx="12" cy="12" r="2"></circle></svg>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="6"></circle><circle cx="12" cy="2" r="2"></circle></svg>
           MPU Calibration
         </span>
         <div style="display:flex; gap:6px; flex-wrap:wrap;">
@@ -139,12 +170,12 @@
       <div class="note">Calibration results are stored in ESP32 flash automatically. Upright calibration on pins is fully supported. Use Zero Yaw to re-center heading if needed.</div>
     </div>
 
-    <!-- MPU Arm Control -->
+    <!-- MPU Arm Control (Wireless via ESP-NOW) -->
     <div class="glass-panel panel" style="border-color:rgba(16,185,129,0.4);">
       <div class="panel-head">
         <span class="panel-title" style="color:#34d399;">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 11V6a2 2 0 0 0-4 0v5"></path><path d="M14 10V4a2 2 0 0 0-4 0v6"></path><path d="M10 10.5V6a2 2 0 0 0-4 0v8"></path><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"></path></svg>
-          MPU Arm Control
+          Wireless MPU Motion Control
         </span>
       </div>
 
@@ -161,7 +192,7 @@
 
       <div id="ctrl-axis-rows" style="display:flex; flex-direction:column; gap:8px;"></div>
 
-      <div class="note">Tilt the sensor away from the upright neutral pose to move the arm. Tap Set Neutral first so the arm starts centered.</div>
+      <div class="note">Tilt the MPU node away from upright neutral to drive the remote Arm over ESP-NOW. Tap Set Neutral first so the arm starts centered.</div>
     </div>
 
     <!-- Quick Arm Controls -->
@@ -199,7 +230,7 @@
       </div>
     </div>
 
-    <!-- 3 MP90S Servo Sliders -->
+    <!-- 3 MP90S Servo Sliders (Wireless Link to Receiver) -->
     <div class="glass-panel" style="border-radius:16px; padding:12px; display:flex; flex-direction:column; gap:10px; border-color:rgba(56,189,248,0.4);">
       <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid rgba(255,255,255,0.1); padding-bottom:6px; gap:6px; flex-wrap:wrap;">
         <span style="font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:0.05em; color:#38bdf8; display:flex; align-items:center; gap:6px;">
@@ -210,7 +241,7 @@
             <line x1="1" y1="14" x2="7" y2="14"></line><line x1="9" y1="8" x2="15" y2="8"></line>
             <line x1="17" y1="16" x2="23" y2="16"></line>
           </svg>
-          MP90S Sliders
+          Remote Arm Sliders
         </span>
         <div style="display:flex; align-items:center; gap:6px;">
           <button id="auto-idle-btn" type="button" onclick="toggleAutoIdle()" style="padding:4px 8px; border-radius:9999px; background:#1e293b; color:rgba(255,255,255,0.75); border:1px solid #475569; font-size:10px; font-weight:700; cursor:pointer;">
@@ -223,12 +254,12 @@
         </div>
       </div>
 
-      <!-- Servo 1 (GPIO 1) -->
+      <!-- Servo 1 (Claw) -->
       <div class="servo-card">
         <div style="display:flex; justify-content:space-between; align-items:center; font-size:11px; margin-bottom:6px;">
           <div style="display:flex; align-items:center; gap:6px;">
             <span id="s1-header" onclick="editServoName(0)" style="cursor:pointer;">Servo 1 — Claw: <span id="s1-val" style="color:#38bdf8; font-family:monospace; font-weight:700;">90°</span></span>
-            <span class="pin-badge">GPIO 1</span>
+            <span class="pin-badge">Arm GP1</span>
             <span id="s1-state-badge" class="pin-badge" style="background:rgba(148,163,184,0.15); color:#94a3b8; border-color:rgba(148,163,184,0.3);">IDLE</span>
           </div>
           <span style="font-size:10px; color:rgba(255,255,255,0.5);">Trim: <span id="o1-val" style="color:#f59e0b; font-family:monospace; font-weight:700;">0°</span></span>
@@ -242,12 +273,12 @@
         </div>
       </div>
 
-      <!-- Servo 2 (GPIO 38) -->
+      <!-- Servo 2 (Arm) -->
       <div class="servo-card">
         <div style="display:flex; justify-content:space-between; align-items:center; font-size:11px; margin-bottom:6px;">
           <div style="display:flex; align-items:center; gap:6px;">
             <span id="s2-header" onclick="editServoName(1)" style="cursor:pointer;">Servo 2 — Arm: <span id="s2-val" style="color:#38bdf8; font-family:monospace; font-weight:700;">90°</span></span>
-            <span class="pin-badge">GPIO 38</span>
+            <span class="pin-badge">Arm GP38</span>
             <span id="s2-state-badge" class="pin-badge" style="background:rgba(148,163,184,0.15); color:#94a3b8; border-color:rgba(148,163,184,0.3);">IDLE</span>
           </div>
           <span style="font-size:10px; color:rgba(255,255,255,0.5);">Trim: <span id="o2-val" style="color:#f59e0b; font-family:monospace; font-weight:700;">0°</span></span>
@@ -261,12 +292,12 @@
         </div>
       </div>
 
-      <!-- Servo 3 (GPIO 39) -->
+      <!-- Servo 3 (Shoulder) -->
       <div class="servo-card">
         <div style="display:flex; justify-content:space-between; align-items:center; font-size:11px; margin-bottom:6px;">
           <div style="display:flex; align-items:center; gap:6px;">
             <span id="s3-header" onclick="editServoName(2)" style="cursor:pointer;">Servo 3 — Shoulder: <span id="s3-val" style="color:#38bdf8; font-family:monospace; font-weight:700;">90°</span></span>
-            <span class="pin-badge">GPIO 39</span>
+            <span class="pin-badge">Arm GP39</span>
             <span id="s3-state-badge" class="pin-badge" style="background:rgba(148,163,184,0.15); color:#94a3b8; border-color:rgba(148,163,184,0.3);">IDLE</span>
           </div>
           <span style="font-size:10px; color:rgba(255,255,255,0.5);">Trim: <span id="o3-val" style="color:#f59e0b; font-family:monospace; font-weight:700;">0°</span></span>
@@ -370,7 +401,7 @@
     <div class="glass-panel" style="border-radius:16px; padding:12px; height:170px; display:flex; flex-direction:column;">
       <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid rgba(255,255,255,0.1); padding-bottom:6px; font-size:11px; color:rgba(255,255,255,0.6);">
         <div style="display:flex; align-items:center; gap:8px;">
-          <span style="font-weight:700;">BLE Log</span>
+          <span style="font-weight:700;">BLE &amp; ESP-NOW Log</span>
           <span id="ble-counters" style="font-family:monospace; font-size:10px; color:#38bdf8; font-weight:bold;">RX: 0 | TX: 0</span>
         </div>
         <div style="display:flex; align-items:center; gap:8px;">
@@ -394,7 +425,7 @@
 
   <footer style="margin-top:8px;">
     <form onsubmit="handleSendCustom(event)" style="display:flex; gap:8px;">
-      <input type="text" id="cmd-input" placeholder="Command (e.g. s1 90, mpu_get, mpu_cal gyro, status)..." style="flex:1; background:rgba(255,255,255,0.1); border:1px solid rgba(255,255,255,0.15); border-radius:12px; padding:8px 12px; font-size:12px; color:white; outline:none;">
+      <input type="text" id="cmd-input" placeholder="Command (e.g. s1 90, mpu_ctrl on, espnow)..." style="flex:1; background:rgba(255,255,255,0.1); border:1px solid rgba(255,255,255,0.15); border-radius:12px; padding:8px 12px; font-size:12px; color:white; outline:none;">
       <button type="submit" class="touch-btn" style="padding:0 16px; border-radius:12px; background:#0284c7; color:white; font-size:12px; font-weight:600; border:none; cursor:pointer; flex-direction:row; gap:6px;">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
         <span>Send</span>

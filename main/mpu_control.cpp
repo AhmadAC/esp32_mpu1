@@ -1,6 +1,8 @@
 #include "mpu_control.h"
+#include "node_config.h"
 #include "imu.h"
 #include "servo_controller.h"
+#include "espnow_sync.h"
 #include "esp_log.h"
 #include "nvs.h"
 #include "freertos/FreeRTOS.h"
@@ -86,9 +88,8 @@ static void control_task(void *pvParameters) {
         }
 
         if (!was_enabled) {
-            // Start from the current servo positions so enabling never causes a sudden jump
             for (int i = 0; i < 3; i++) {
-                filt[i] = (float)servo_get_angle(AXIS_SERVO[i]);
+                filt[i] = 90.0f;
                 last_sent[i] = -1000;
             }
             was_enabled = true;
@@ -109,6 +110,8 @@ static void control_task(void *pvParameters) {
         }
         portEXIT_CRITICAL(&s_lock);
 
+        int target_angles[3] = { 90, 90, 90 };
+
         for (int i = 0; i < 3; i++) {
             if (!axes[i]) continue;
 
@@ -123,10 +126,26 @@ static void control_task(void *pvParameters) {
 
             filt[i] += SMOOTH_ALPHA * (target - filt[i]);
             int angle = (int)lroundf(filt[i]);
-            if (angle != last_sent[i]) {
-                servo_set_angle(AXIS_SERVO[i], angle);
-                last_sent[i] = angle;
-            }
+            target_angles[AXIS_SERVO[i]] = angle;
+        }
+
+        bool changed = (target_angles[0] != last_sent[0] ||
+                        target_angles[1] != last_sent[1] ||
+                        target_angles[2] != last_sent[2]);
+
+        if (changed) {
+            last_sent[0] = target_angles[0];
+            last_sent[1] = target_angles[1];
+            last_sent[2] = target_angles[2];
+
+#if NODE_IS_SENDER
+            // Stream wirelessly over ESP-NOW to the Arm board
+            espnow_sync_send_servos(target_angles[0], target_angles[1], target_angles[2], 0, true);
+#else
+            servo_set_angle(0, target_angles[0]);
+            servo_set_angle(1, target_angles[1]);
+            servo_set_angle(2, target_angles[2]);
+#endif
         }
     }
 }

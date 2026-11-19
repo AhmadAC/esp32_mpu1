@@ -1,10 +1,13 @@
 #include "console_serial.h"
 #include "command_processor.h"
+#include "node_config.h"
+#include "espnow_sync.h"
 #include "driver/uart.h"
 #include "driver/usb_serial_jtag.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include <string.h>
+#include <stdio.h>
 
 void console_print(const char *str) {
     if (!str) return;
@@ -32,17 +35,35 @@ static void console_read_task(void *pvParameter) {
 
     vTaskDelay(pdMS_TO_TICKS(400));
 
-    const char *banner =
+    char banner[600];
+#if NODE_IS_SENDER
+    snprintf(banner, sizeof(banner),
         "\n==================================================\n"
-        "   YD-ESP32-S3 3-Servo Arm Controller + MPU-6050\n"
-        "   Claw: GPIO 1 | Arm: GPIO 38 | Shoulder: GPIO 39\n"
-        "   MPU-6050: SDA GPIO 8 | SCL GPIO 9\n"
-        "   Control: BLE NUS ('ESP32S3-Arm') & Native USB REPL\n"
+        "   YD-ESP32-S3 Wireless Node [%s]\n"
+        "   Hardware: MPU-6050 (SDA GPIO 8 | SCL GPIO 9)\n"
+        "   Wireless Mesh: ESP-NOW Auto-Discovery Channel 1\n"
+        "   App Interface: BLE NUS ('%s')\n"
         "==================================================\n"
-        "Commands: 's1 90', 'move 90 90 90 500', 'home', 'detach',\n"
-        "          'mpu on', 'mpu_cal gyro', 'action_run 1', 'help'\n"
+        "Commands: 'mpu_ctrl on', 'mpu on', 'mpu_cal gyro', 'espnow',\n"
+        "          'home', 's1 90', 'move 90 90 90 500', 'status'\n"
         "==================================================\n"
-        "REPL> ";
+        "REPL> ",
+        NODE_ROLE_NAME, BLE_DEVICE_NAME);
+#else
+    snprintf(banner, sizeof(banner),
+        "\n==================================================\n"
+        "   YD-ESP32-S3 Wireless Node [%s]\n"
+        "   Hardware: 3 MP90S Servos (Claw GP1, Arm GP38, Shoulder GP39)\n"
+        "   Wireless Mesh: ESP-NOW Auto-Discovery Channel 1\n"
+        "   App Interface: BLE NUS ('%s')\n"
+        "==================================================\n"
+        "Commands: 'home', 'detach', 's1 90', 'action_run 1',\n"
+        "          'espnow', 'status', 'help'\n"
+        "==================================================\n"
+        "REPL> ",
+        NODE_ROLE_NAME, BLE_DEVICE_NAME);
+#endif
+
     console_print(banner);
 
     char cmd_buf[512];
