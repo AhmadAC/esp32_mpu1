@@ -64,6 +64,10 @@ size_t command_build_status(char *buf, size_t len) {
     is_running = servo_is_sequence_running();
     is_looping = servo_is_sequence_looping();
     active_slot = servo_get_active_slot();
+#elif NODE_IS_SENDER
+    // On Sender: populate from cached Arm Receiver status over ESP-NOW
+    espnow_sync_get_cached_arm_status(&s1, &s2, &s3, &o1, &o2, &o3, &e1, &e2, &e3,
+                                      &auto_idle, &is_running, &is_looping, &active_slot);
 #endif
 
     int brownout = (esp_reset_reason() == ESP_RST_BROWNOUT) ? 1 : 0;
@@ -111,7 +115,42 @@ void command_process(const char *cmd_line, command_print_fn_t print_fn) {
         return;
     }
 
-    // ---------------- MPU-6050 commands ----------------
+    // ---------------- General System Commands ----------------
+    if (strcmp(p, "status") == 0) {
+        char msg[256];
+        command_build_status(msg, sizeof(msg));
+        print_fn(msg);
+
+        char espnow_str[128];
+        if (espnow_sync_format_line(espnow_str, sizeof(espnow_str))) {
+            print_fn(espnow_str);
+        }
+        return;
+    }
+
+    if (strcmp(p, "help") == 0 || strcmp(p, "?") == 0) {
+        print_fn("YD-ESP32-S3 Wireless Arm Controller (ESP-NOW):\n"
+                 "  espnow                               : Print ESP-NOW pairing and RSSI state\n"
+                 "  mpu <on|off>                         : BLE telemetry stream\n"
+                 "  mpu_read / mpu_get                   : IMU raw telemetry / state\n"
+                 "  mpu_cal <gyro|accel|neutral|yaw|clear>: Calibrate MPU\n"
+                 "  mpu_ctrl <on|off>                    : Wireless MPU-to-Arm control\n"
+                 "  claw <0-180|open|close>              : Claw gripper\n"
+                 "  arm <0-180> / shoulder <0-180>       : Joint angles\n"
+                 "  s1 <deg> / s2 <deg> / s3 <deg>       : Move individual servo\n"
+                 "  home / stop / detach / attach        : Quick control\n"
+                 "  status                               : Full system telemetry\n");
+        return;
+    }
+
+    if (strcmp(p, "reboot") == 0 || strcmp(p, "restart") == 0) {
+        print_fn("Rebooting ESP32-S3...\n");
+        vTaskDelay(pdMS_TO_TICKS(100));
+        esp_restart();
+        return;
+    }
+
+    // ---------------- MPU-6050 Commands ----------------
     if (strncmp(p, "mpu ", 4) == 0) {
         const char *arg = p + 4;
         while (*arg == ' ') arg++;
@@ -196,7 +235,7 @@ void command_process(const char *cmd_line, command_print_fn_t print_fn) {
     }
 
 #if NODE_IS_SENDER
-    // On MPU Sender: forward movement, joints, and action commands over ESP-NOW to Arm
+    // On MPU Sender: forward arm motion, joint angles, and programmable actions over ESP-NOW to Receiver
     release_mpu_control(print_fn);
     if (espnow_sync_is_paired()) {
         espnow_sync_send_cmd(p);
@@ -209,7 +248,7 @@ void command_process(const char *cmd_line, command_print_fn_t print_fn) {
         return;
     }
 #else
-    // ---------------- Receiver: Local Joint & Servo Execution ----------------
+    // ---------------- Arm Receiver: Local Servo Execution ----------------
     if (strncmp(p, "claw ", 5) == 0) {
         const char *arg = p + 5;
         int angle = -1;
@@ -255,6 +294,9 @@ void command_process(const char *cmd_line, command_print_fn_t print_fn) {
         int angle = atoi(p + 3);
         if (angle >= SERVO_MIN_ANGLE && angle <= SERVO_MAX_ANGLE) {
             servo_set_angle(idx, angle);
+            char msg[48];
+            snprintf(msg, sizeof(msg), "ANG:%d,%d,%d\n", servo_get_angle(0), servo_get_angle(1), servo_get_angle(2));
+            print_fn(msg);
             return;
         } else {
             char msg[80];
@@ -478,40 +520,6 @@ void command_process(const char *cmd_line, command_print_fn_t print_fn) {
         return;
     }
 #endif
-
-    if (strcmp(p, "status") == 0) {
-        char msg[256];
-        command_build_status(msg, sizeof(msg));
-        print_fn(msg);
-
-        char espnow_str[128];
-        if (espnow_sync_format_line(espnow_str, sizeof(espnow_str))) {
-            print_fn(espnow_str);
-        }
-        return;
-    }
-
-    if (strcmp(p, "help") == 0 || strcmp(p, "?") == 0) {
-        print_fn("YD-ESP32-S3 Wireless Arm Controller (ESP-NOW):\n"
-                 "  espnow                               : Print ESP-NOW pairing and RSSI state\n"
-                 "  mpu <on|off>                         : BLE telemetry stream\n"
-                 "  mpu_read / mpu_get                   : IMU raw telemetry / state\n"
-                 "  mpu_cal <gyro|accel|neutral|yaw|clear>: Calibrate MPU\n"
-                 "  mpu_ctrl <on|off>                    : Wireless MPU-to-Arm control\n"
-                 "  claw <0-180|open|close>              : Claw gripper\n"
-                 "  arm <0-180> / shoulder <0-180>       : Joint angles\n"
-                 "  s1 <deg> / s2 <deg> / s3 <deg>       : Move individual servo\n"
-                 "  home / stop / detach / attach        : Quick control\n"
-                 "  status                               : Full system telemetry\n");
-        return;
-    }
-
-    if (strcmp(p, "reboot") == 0 || strcmp(p, "restart") == 0) {
-        print_fn("Rebooting ESP32-S3...\n");
-        vTaskDelay(pdMS_TO_TICKS(100));
-        esp_restart();
-        return;
-    }
 
     char err_msg[96];
     snprintf(err_msg, sizeof(err_msg), ">> Unknown command: '%s'. Enter 'help'.\n", p);

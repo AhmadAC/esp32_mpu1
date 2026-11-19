@@ -2,6 +2,7 @@
 #include "ble_server.h"
 #include "servo_controller.h"
 #include "command_processor.h"
+#include "console_serial.h"
 
 #include <string.h>
 #include <stdio.h>
@@ -30,9 +31,17 @@ static uint16_t s_tx_seq = 0;
 static espnow_cmd_handler_t s_cmd_handler = NULL;
 static portMUX_TYPE s_mux = portMUX_INITIALIZER_UNLOCKED;
 
+// Cached status on MPU Sender received from Arm Receiver
+static int  s_cached_s1 = 90, s_cached_s2 = 90, s_cached_s3 = 90;
+static int  s_cached_o1 = 0,  s_cached_o2 = 0,  s_cached_o3 = 0;
+static bool s_cached_e1 = false, s_cached_e2 = false, s_cached_e3 = false;
+static bool s_cached_idle = false, s_cached_run = false, s_cached_loop = false;
+static int  s_cached_slot = 0;
+static bool s_has_cached_status = false;
+
 static void notify_link_state(void);
 
-static bool add_peer_internal(const uint8_t *mac) {
+static bool add_or_update_peer(const uint8_t *mac) {
     if (esp_now_is_peer_exist(mac)) {
         return true;
     }
@@ -65,77 +74,51 @@ static void handle_incoming_packet(const uint8_t *src_mac, const uint8_t *data, 
     const espnow_packet_t *pkt = (const espnow_packet_t *)data;
     if (pkt->magic != ESPNOW_MAGIC) return;
 
-    // Discard packets from ourselves
+    // Discard packets originating from self
     if (memcmp(pkt->sender_mac, s_local_mac, 6) == 0) return;
 
-    // Reject packets from the same role (e.g. two senders or two receivers)
+    // Reject packets from the identical role
     if (pkt->sender_role == (uint8_t)s_local_role) return;
 
     s_last_recv_us = esp_timer_get_time();
     s_last_rssi = rssi;
 
-    switch (pkt->msg_type) {
-    case ESPNOW_MSG_DISCOVERY: {
-        ESP_LOGI(TAG, "Discovery beacon received from %02X:%02X:%02X:%02X:%02X:%02X (role=%d)",
-                 src_mac[0], src_mac[1], src_mac[2], src_mac[3], src_mac[4], src_mac[5], pkt->sender_role);
+    add_or_update_peer(pkt->sender_mac);
 
-        add_peer_internal(src_mac);
-
-        if (s_local_role == ESPNOW_ROLE_SENDER) {
-            espnow_packet_t req = {};
-            req.msg_type = ESPNOW_MSG_PAIR_REQ;
-            req.payload.discovery.proto_version = 1;
-            send_packet(src_mac, &req);
-        } else {
-            espnow_packet_t ack = {};
-            ack.msg_type = ESPNOW_MSG_PAIR_ACK;
-            ack.payload.pair_resp.accepted = 1;
-            send_packet(src_mac, &ack);
-
-            portENTER_CRITICAL(&s_mux);
-            memcpy(s_peer_mac, src_mac, 6);
-            s_is_paired = true;
-            portEXIT_CRITICAL(&s_mux);
-            notify_link_state();
-        }
-        break;
-    }
-
-    case ESPNOW_MSG_PAIR_REQ: {
-        add_peer_internal(src_mac);
-        portENTER_CRITICAL(&s_mux);
-        memcpy(s_peer_mac, src_mac, 6);
+    bool just_paired = false;
+    portENTER_CRITICAL(&s_mux);
+    if (!s_is_paired || memcmp(s_peer_mac, pkt->sender_mac, 6) != 0) {
+        memcpy(s_peer_mac, pkt->sender_mac, 6);
         s_is_paired = true;
-        portEXIT_CRITICAL(&s_mux);
+        just_paired = true;
+    }
+    portEXIT_CRITICAL(&s_mux);
+
+    if (just_paired) {
+        ESP_LOGI(TAG, "ESP-NOW Auto-paired with peer %02X:%02X:%02X:%02X:%02X:%02X (role=%d)",
+                 pkt->sender_mac[0], pkt->sender_mac[1], pkt->sender_mac[2],
+                 pkt->sender_mac[3], pkt->sender_mac[4], pkt->sender_mac[5], pkt->sender_role);
+        notify_link_state();
 
         espnow_packet_t ack = {};
         ack.msg_type = ESPNOW_MSG_PAIR_ACK;
         ack.payload.pair_resp.accepted = 1;
-        send_packet(src_mac, &ack);
+        send_packet(pkt->sender_mac, &ack);
+    }
 
-        ESP_LOGI(TAG, "Auto-paired with Master %02X:%02X:%02X:%02X:%02X:%02X",
-                 src_mac[0], src_mac[1], src_mac[2], src_mac[3], src_mac[4], src_mac[5]);
-        notify_link_state();
+    switch (pkt->msg_type) {
+    case ESPNOW_MSG_DISCOVERY: {
+        espnow_packet_t ack = {};
+        ack.msg_type = ESPNOW_MSG_PAIR_ACK;
+        ack.payload.pair_resp.accepted = 1;
+        send_packet(pkt->sender_mac, &ack);
         break;
     }
 
-    case ESPNOW_MSG_PAIR_ACK: {
-        add_peer_internal(src_mac);
-        portENTER_CRITICAL(&s_mux);
-        memcpy(s_peer_mac, src_mac, 6);
-        s_is_paired = true;
-        portEXIT_CRITICAL(&s_mux);
-
-        ESP_LOGI(TAG, "Auto-pair confirmed by Receiver %02X:%02X:%02X:%02X:%02X:%02X",
-                 src_mac[0], src_mac[1], src_mac[2], src_mac[3], src_mac[4], src_mac[5]);
-        notify_link_state();
+    case ESPNOW_MSG_PAIR_REQ:
+    case ESPNOW_MSG_PAIR_ACK:
+    case ESPNOW_MSG_HEARTBEAT:
         break;
-    }
-
-    case ESPNOW_MSG_HEARTBEAT: {
-        // Keep-alive packet refreshed s_last_recv_us
-        break;
-    }
 
     case ESPNOW_MSG_SERVO_SET: {
         if (s_local_role == ESPNOW_ROLE_RECEIVER) {
@@ -169,25 +152,46 @@ static void handle_incoming_packet(const uint8_t *src_mac, const uint8_t *data, 
         break;
     }
 
+    case ESPNOW_MSG_CMD_REPLY: {
+        if (s_local_role == ESPNOW_ROLE_SENDER) {
+            char reply_copy[ESPNOW_PAYLOAD_CMD_SZ + 1];
+            strncpy(reply_copy, pkt->payload.cmd_reply.reply, ESPNOW_PAYLOAD_CMD_SZ);
+            reply_copy[ESPNOW_PAYLOAD_CMD_SZ] = '\0';
+
+            // Forward reply to BLE connected app & local serial
+            ble_server_send_notify(reply_copy);
+            console_print(reply_copy);
+        }
+        break;
+    }
+
     case ESPNOW_MSG_STATUS: {
         if (s_local_role == ESPNOW_ROLE_SENDER) {
-            uint8_t s1 = pkt->payload.status.s1;
-            uint8_t s2 = pkt->payload.status.s2;
-            uint8_t s3 = pkt->payload.status.s3;
-            int8_t  o1 = pkt->payload.status.o1;
-            int8_t  o2 = pkt->payload.status.o2;
-            int8_t  o3 = pkt->payload.status.o3;
-            uint8_t en = pkt->payload.status.en_mask;
+            portENTER_CRITICAL(&s_mux);
+            s_cached_s1 = pkt->payload.status.s1;
+            s_cached_s2 = pkt->payload.status.s2;
+            s_cached_s3 = pkt->payload.status.s3;
+            s_cached_o1 = pkt->payload.status.o1;
+            s_cached_o2 = pkt->payload.status.o2;
+            s_cached_o3 = pkt->payload.status.o3;
+            s_cached_e1 = (pkt->payload.status.en_mask & 1) != 0;
+            s_cached_e2 = (pkt->payload.status.en_mask & 2) != 0;
+            s_cached_e3 = (pkt->payload.status.en_mask & 4) != 0;
+            s_cached_idle = (pkt->payload.status.flags & 1) != 0;
+            s_cached_run  = (pkt->payload.status.flags & 2) != 0;
+            s_cached_loop = (pkt->payload.status.flags & 4) != 0;
+            s_cached_slot = pkt->payload.status.active_slot;
+            s_has_cached_status = true;
+            portEXIT_CRITICAL(&s_mux);
 
             char status_line[160];
             snprintf(status_line, sizeof(status_line),
                      "STATUS:s1=%d,s2=%d,s3=%d,o1=%d,o2=%d,o3=%d,en1=%d,en2=%d,en3=%d,idle=%d,run=%d,act=%d,loop=%d,bo=0,mpuc=1,mpuok=1\n",
-                     s1, s2, s3, o1, o2, o3,
-                     (en & 1) ? 1 : 0, (en & 2) ? 1 : 0, (en & 4) ? 1 : 0,
-                     (pkt->payload.status.flags & 1) ? 1 : 0,
-                     (pkt->payload.status.flags & 2) ? 1 : 0,
-                     pkt->payload.status.active_slot,
-                     (pkt->payload.status.flags & 4) ? 1 : 0);
+                     s_cached_s1, s_cached_s2, s_cached_s3,
+                     s_cached_o1, s_cached_o2, s_cached_o3,
+                     s_cached_e1 ? 1 : 0, s_cached_e2 ? 1 : 0, s_cached_e3 ? 1 : 0,
+                     s_cached_idle ? 1 : 0, s_cached_run ? 1 : 0,
+                     s_cached_slot, s_cached_loop ? 1 : 0);
             ble_server_send_notify(status_line);
         }
         break;
@@ -220,6 +224,7 @@ static void notify_link_state(void) {
     char line[128];
     if (espnow_sync_format_line(line, sizeof(line))) {
         ble_server_send_notify(line);
+        console_print(line);
     }
 }
 
@@ -227,12 +232,12 @@ static void espnow_sync_task(void *pvParameters) {
     (void)pvParameters;
 
     while (1) {
-        vTaskDelay(pdMS_TO_TICKS(800));
+        vTaskDelay(pdMS_TO_TICKS(500));
 
         int64_t now_us = esp_timer_get_time();
 
-        // 1. Check for stale peer connection timeout (3.5 seconds)
         if (s_is_paired) {
+            // Check for stale link timeout (3.5 seconds)
             if (now_us - s_last_recv_us > 3500000) {
                 ESP_LOGW(TAG, "ESP-NOW link lost (peer silent). Re-entering auto-discovery.");
                 portENTER_CRITICAL(&s_mux);
@@ -241,15 +246,35 @@ static void espnow_sync_task(void *pvParameters) {
                 portEXIT_CRITICAL(&s_mux);
                 notify_link_state();
             } else {
-                // Send heartbeat to maintain link
-                espnow_packet_t hb = {};
-                hb.msg_type = ESPNOW_MSG_HEARTBEAT;
-                hb.payload.heartbeat.uptime_ms = (uint32_t)(now_us / 1000);
-                send_packet(s_peer_mac, &hb);
+                if (s_local_role == ESPNOW_ROLE_RECEIVER) {
+                    // Transmit Arm status back to MPU Sender
+                    int s1 = 90, s2 = 90, s3 = 90;
+                    int o1 = 0,  o2 = 0,  o3 = 0;
+                    bool e1 = false, e2 = false, e3 = false;
+                    servo_get_all_angles(&s1, &s2, &s3);
+                    servo_get_all_offsets(&o1, &o2, &o3);
+                    servo_get_all_enabled(&e1, &e2, &e3);
+
+                    uint8_t en_mask = (e1 ? 1 : 0) | (e2 ? 2 : 0) | (e3 ? 4 : 0);
+                    uint8_t flags = (servo_get_auto_idle() ? 1 : 0) |
+                                    (servo_is_sequence_running() ? 2 : 0) |
+                                    (servo_is_sequence_looping() ? 4 : 0);
+                    uint8_t slot = (uint8_t)servo_get_active_slot();
+
+                    espnow_sync_send_status((uint8_t)s1, (uint8_t)s2, (uint8_t)s3,
+                                            (int8_t)o1, (int8_t)o2, (int8_t)o3,
+                                            en_mask, flags, slot);
+                } else {
+                    // Send heartbeat keep-alive
+                    espnow_packet_t hb = {};
+                    hb.msg_type = ESPNOW_MSG_HEARTBEAT;
+                    hb.payload.heartbeat.uptime_ms = (uint32_t)(now_us / 1000);
+                    send_packet(s_peer_mac, &hb);
+                }
             }
         }
 
-        // 2. If unpaired, broadcast discovery beacon
+        // Broadcast discovery beacons when unpaired
         if (!s_is_paired) {
             espnow_packet_t disc = {};
             disc.msg_type = ESPNOW_MSG_DISCOVERY;
@@ -264,14 +289,27 @@ void espnow_sync_init(espnow_role_t role) {
     s_is_paired = false;
     memset(s_peer_mac, 0, 6);
 
-    ESP_ERROR_CHECK(esp_netif_init());
-    ESP_ERROR_CHECK(esp_event_loop_create_default());
+    esp_err_t ret = esp_netif_init();
+    if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
+        ESP_ERROR_CHECK(ret);
+    }
+    ret = esp_event_loop_create_default();
+    if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
+        ESP_ERROR_CHECK(ret);
+    }
+
+    if (!esp_netif_get_handle_from_ifkey("WIFI_STA_DEF")) {
+        esp_netif_create_default_wifi_sta();
+    }
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
     ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_start());
+
+    // Disable modem power save to ensure RF is always active for ESP-NOW packets
+    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
     ESP_ERROR_CHECK(esp_wifi_set_channel(ESPNOW_CHANNEL, WIFI_SECOND_CHAN_NONE));
     ESP_ERROR_CHECK(esp_wifi_get_mac(WIFI_IF_STA, s_local_mac));
 
@@ -279,11 +317,11 @@ void espnow_sync_init(espnow_role_t role) {
     ESP_ERROR_CHECK(esp_now_register_recv_cb(espnow_recv_cb));
     ESP_ERROR_CHECK(esp_now_register_send_cb(espnow_send_cb));
 
-    add_peer_internal(BCAST_MAC);
+    add_or_update_peer(BCAST_MAC);
 
     xTaskCreatePinnedToCore(espnow_sync_task, "espnow_task", 4096, NULL, 4, NULL, 1);
 
-    ESP_LOGI(TAG, "ESP-NOW Auto-Sync Initialized (Role=%s, MAC=%02X:%02X:%02X:%02X:%02X:%02X, CH=%d)",
+    ESP_LOGI(TAG, "ESP-NOW Auto-Sync initialized (Role=%s, MAC=%02X:%02X:%02X:%02X:%02X:%02X, CH=%d)",
              role == ESPNOW_ROLE_SENDER ? "MPU-Sender" : "Arm-Receiver",
              s_local_mac[0], s_local_mac[1], s_local_mac[2], s_local_mac[3], s_local_mac[4], s_local_mac[5],
              ESPNOW_CHANNEL);
@@ -332,6 +370,17 @@ bool espnow_sync_send_cmd(const char *cmd_str) {
     return send_packet(s_peer_mac, &pkt);
 }
 
+bool espnow_sync_send_reply(const char *reply_str) {
+    if (!s_is_paired || !reply_str) return false;
+
+    espnow_packet_t pkt = {};
+    pkt.msg_type = ESPNOW_MSG_CMD_REPLY;
+    strncpy(pkt.payload.cmd_reply.reply, reply_str, ESPNOW_PAYLOAD_CMD_SZ - 1);
+    pkt.payload.cmd_reply.reply[ESPNOW_PAYLOAD_CMD_SZ - 1] = '\0';
+
+    return send_packet(s_peer_mac, &pkt);
+}
+
 bool espnow_sync_send_status(uint8_t s1, uint8_t s2, uint8_t s3,
                              int8_t o1, int8_t o2, int8_t o3,
                              uint8_t en_mask, uint8_t flags, uint8_t active_slot) {
@@ -350,6 +399,31 @@ bool espnow_sync_send_status(uint8_t s1, uint8_t s2, uint8_t s3,
     pkt.payload.status.active_slot = active_slot;
 
     return send_packet(s_peer_mac, &pkt);
+}
+
+bool espnow_sync_get_cached_arm_status(int *s1, int *s2, int *s3,
+                                       int *o1, int *o2, int *o3,
+                                       bool *e1, bool *e2, bool *e3,
+                                       bool *idle, bool *run, bool *loop, int *slot) {
+    if (!s_has_cached_status) return false;
+
+    portENTER_CRITICAL(&s_mux);
+    if (s1) *s1 = s_cached_s1;
+    if (s2) *s2 = s_cached_s2;
+    if (s3) *s3 = s_cached_s3;
+    if (o1) *o1 = s_cached_o1;
+    if (o2) *o2 = s_cached_o2;
+    if (o3) *o3 = s_cached_o3;
+    if (e1) *e1 = s_cached_e1;
+    if (e2) *e2 = s_cached_e2;
+    if (e3) *e3 = s_cached_e3;
+    if (idle) *idle = s_cached_idle;
+    if (run)  *run  = s_cached_run;
+    if (loop) *loop = s_cached_loop;
+    if (slot) *slot = s_cached_slot;
+    portEXIT_CRITICAL(&s_mux);
+
+    return true;
 }
 
 void espnow_sync_register_cmd_handler(espnow_cmd_handler_t handler) {

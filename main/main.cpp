@@ -17,8 +17,16 @@
 static const char *TAG = "APP_MAIN";
 
 #if NODE_IS_RECEIVER
+// Forward command replies back over ESP-NOW to MPU Sender and local BLE
+static void on_espnow_command_reply(const char *reply) {
+    if (reply && strlen(reply) > 0) {
+        espnow_sync_send_reply(reply);
+        ble_server_send_notify(reply);
+    }
+}
+
 static void on_espnow_command(const char *cmd_str) {
-    command_process(cmd_str, ble_server_send_notify);
+    command_process(cmd_str, on_espnow_command_reply);
 }
 #endif
 

@@ -60,11 +60,11 @@ function handleEspNowLine(text) {
   renderEspNowState();
 
   if (!wasPaired && espnowState.paired) {
-    showToast(`ESP-NOW auto-paired with ${espnowState.peer}`, "success");
-    appendLog("ESPNOW", `Paired with ${espnowState.peer} (RSSI: ${espnowState.rssi} dBm)`);
+    showToast(`ESP-NOW paired with ${espnowState.peer}`, "success");
+    appendLog("ESPNOW", `Connected to ${espnowState.peer} (${espnowState.rssi} dBm)`);
   } else if (wasPaired && !espnowState.paired) {
-    showToast("ESP-NOW peer link lost. Auto-discovering...", "warn");
-    appendLog("ESPNOW", "Link lost. Scanning for peer beacon...");
+    showToast("ESP-NOW link lost. Searching...", "warn");
+    appendLog("ESPNOW", "Link disconnected. Searching for peer beacon...");
   }
   return true;
 }
@@ -77,7 +77,7 @@ function renderEspNowState() {
 
   if (badge) {
     if (espnowState.paired) {
-      badge.innerText = "Paired & Linked";
+      badge.innerText = "Linked & Active";
       badge.className = "chip chip-ok";
     } else {
       badge.innerText = "Auto-Discovering...";

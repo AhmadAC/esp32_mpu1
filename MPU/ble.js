@@ -128,13 +128,14 @@ async function connectDevice() {
       if (!device || !device.deviceId) throw new Error("No device selected.");
 
       nativeDeviceId = device.deviceId;
-      appendLog("BLE", `Connecting to ${device.name || nativeDeviceId}...`);
+      const devName = device.name || "ESP32S3-Node";
+      appendLog("BLE", `Connecting to ${devName}...`);
 
       try { if (Ble.stopLEScan) await Ble.stopLEScan(); } catch (e) {}
 
       await Ble.connect({ deviceId: nativeDeviceId }, () => {
         if (isConnected) {
-          showToast("ESP32 disconnected (check battery power)", "error");
+          showToast("Device disconnected", "error");
           onDisconnectedCleanup();
         }
       });
@@ -155,7 +156,7 @@ async function connectDevice() {
         try {
           const hDisc = await Ble.addListener(`disconnected|${nativeDeviceId}`, () => {
             if (isConnected) {
-              showToast("ESP32 disconnected (check battery power)", "error");
+              showToast("Device disconnected", "error");
               onDisconnectedCleanup();
             }
           });
@@ -197,19 +198,21 @@ async function connectDevice() {
         appendLog("BLE Warn", `Notify registration: ${notifErr.message || notifErr}`);
       }
 
-      onConnectedSuccess(device.name || "ESP32S3-Arm");
+      onConnectedSuccess(devName);
 
     } else if (backend.type === "web-bluetooth") {
       webDevice = await navigator.bluetooth.requestDevice({
         filters: [
           { services: [UART_SERVICE_UUID] },
-          { namePrefix: "ESP" }
+          { namePrefix: "ESP" },
+          { namePrefix: "Arm" },
+          { namePrefix: "MPU" }
         ],
         optionalServices: [UART_SERVICE_UUID]
       });
 
       webDevice.addEventListener("gattserverdisconnected", () => {
-        if (isConnected) showToast("ESP32 disconnected (check battery power)", "error");
+        if (isConnected) showToast("Device disconnected", "error");
         onDisconnectedCleanup();
       });
       webServer = await webDevice.gatt.connect();
@@ -226,7 +229,7 @@ async function connectDevice() {
         });
       } catch (notifErr) {}
 
-      onConnectedSuccess(webDevice.name || "ESP32S3-Arm");
+      onConnectedSuccess(webDevice.name || "ESP32S3-Node");
     }
   } catch (err) {
     appendLog("Error", `Connection failed: ${err.message || err}`);
@@ -435,7 +438,7 @@ async function executeSendCommand(commandText) {
 
     const lower = errMsg.toLowerCase();
     if (lower.includes("not connected") || lower.includes("disconnected") || consecutiveWriteErrors >= 2) {
-      showToast("BLE link lost (possible battery sag) — reconnect", "error");
+      showToast("BLE connection lost - reconnect", "error");
       await onDisconnectedCleanup();
     }
   }

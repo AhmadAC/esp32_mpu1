@@ -68,7 +68,7 @@ static void dispatch_completed_line_locked_copy(void) {
         msg[copy_len] = '\0';
         s_rx_line_len = 0;
     }
-    portEXIT_CRITICAL(&s_rx_mux);
+    portEXIT_CRITICAL(&s_mux);
 
     if (copy_len > 0 && s_cmd_queue != NULL) {
         xQueueSend(s_cmd_queue, msg, 0);
@@ -279,9 +279,20 @@ static void ble_advertise(void) {
 
     memset(&fields, 0, sizeof(fields));
     fields.flags = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;
-    fields.name = (uint8_t *)BLE_DEVICE_NAME;
-    fields.name_len = strlen(BLE_DEVICE_NAME);
-    fields.name_is_complete = 1;
+
+    // Place 128-bit UART service UUID into primary ADV payload so iOS CoreBluetooth can filter and discover it
+    fields.uuids128 = (ble_uuid128_t *)&gatt_svr_svc_uart_uuid;
+    fields.num_uuids128 = 1;
+    fields.uuids128_is_complete = 1;
+
+#if NODE_IS_SENDER
+    static const char short_name[] = "MPU-Send";
+#else
+    static const char short_name[] = "Arm-Recv";
+#endif
+    fields.name = (uint8_t *)short_name;
+    fields.name_len = strlen(short_name);
+    fields.name_is_complete = 0;
 
     rc = ble_gap_adv_set_fields(&fields);
     if (rc != 0) {
@@ -289,10 +300,11 @@ static void ble_advertise(void) {
         return;
     }
 
+    // Place full complete device name in scan response
     memset(&rsp_fields, 0, sizeof(rsp_fields));
-    rsp_fields.uuids128 = (ble_uuid128_t *)&gatt_svr_svc_uart_uuid;
-    rsp_fields.num_uuids128 = 1;
-    rsp_fields.uuids128_is_complete = 1;
+    rsp_fields.name = (uint8_t *)BLE_DEVICE_NAME;
+    rsp_fields.name_len = strlen(BLE_DEVICE_NAME);
+    rsp_fields.name_is_complete = 1;
 
     rc = ble_gap_adv_rsp_set_fields(&rsp_fields);
     if (rc != 0) {
@@ -302,15 +314,16 @@ static void ble_advertise(void) {
     memset(&adv_params, 0, sizeof(adv_params));
     adv_params.conn_mode = BLE_GAP_CONN_MODE_UND;
     adv_params.disc_mode = BLE_GAP_DISC_MODE_GEN;
-    adv_params.itvl_min = 0x0040; // 40 ms
-    adv_params.itvl_max = 0x0080; // 80 ms
+    adv_params.itvl_min = 0x0030; // 30 ms for responsive iOS scanning
+    adv_params.itvl_max = 0x0060; // 60 ms
 
     rc = ble_gap_adv_start(s_own_addr_type, NULL, BLE_HS_FOREVER,
                            &adv_params, ble_gap_event, NULL);
     if (rc != 0 && rc != BLE_HS_EALREADY) {
         ESP_LOGE(TAG, "Error starting advertising: rc=%d", rc);
     } else {
-        ESP_LOGI(TAG, "Advertising BLE service as '%s'...", BLE_DEVICE_NAME);
+        ESP_LOGI(TAG, "Advertising BLE as '%s' (Short: '%s', NUS UUID in primary ADV)",
+                 BLE_DEVICE_NAME, short_name);
     }
 }
 
@@ -344,7 +357,7 @@ static void ble_on_reset(int reason) {
 
 void ble_server_init(ble_cmd_callback_t cmd_handler) {
     s_cmd_handler = cmd_handler;
-    s_cmd_queue = xQueueCreate(12, BLE_CMD_MAX_LEN);
+    s_cmd_queue = xQueueCreate(16, BLE_CMD_MAX_LEN);
     s_rx_flush_timer = xTimerCreate("ble_rx_flush", pdMS_TO_TICKS(60), pdFALSE, NULL, rx_flush_timer_cb);
     xTaskCreatePinnedToCore(ble_cmd_exec_task, "ble_cmd_task", 6144, NULL, 5, NULL, 1);
 
