@@ -2,6 +2,7 @@
 #include "ble_server.h"
 #include "driver/ledc.h"
 #include "driver/gpio.h"
+#include "esp_rom_gpio.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "nvs.h"
@@ -24,11 +25,11 @@ static const char *TAG = "SERVO_CTRL";
 
 #define AUTO_IDLE_TIMEOUT_US    3000000
 
-static const gpio_num_t SERVO_PINS[SERVO_COUNT] = {
-    SERVO_1_PIN,
-    SERVO_2_PIN,
-    SERVO_3_PIN,
-    SERVO_4_PIN
+static gpio_num_t s_servo_pins[SERVO_COUNT] = {
+    SERVO_1_PIN_DEFAULT,
+    SERVO_2_PIN_DEFAULT,
+    SERVO_3_PIN_DEFAULT,
+    SERVO_4_PIN_DEFAULT
 };
 
 static const ledc_channel_t LEDC_CHANNELS[SERVO_COUNT] = {
@@ -117,10 +118,28 @@ static void notify_action_state(bool running, int slot, bool loop) {
     ble_server_send_notify(msg);
 }
 
+static void reconfig_ledc_channel(int idx) {
+    gpio_num_t pin = s_servo_pins[idx];
+    esp_rom_gpio_pad_select_gpio(pin);
+    gpio_set_direction(pin, GPIO_MODE_OUTPUT);
+
+    ledc_channel_config_t ledc_ch = {};
+    ledc_ch.channel    = LEDC_CHANNELS[idx];
+    ledc_ch.duty       = s_enabled[idx] ? calc_duty(idx, s_angles[idx], s_offsets[idx]) : 0;
+    ledc_ch.gpio_num   = pin;
+    ledc_ch.speed_mode = LEDC_MODE;
+    ledc_ch.intr_type  = LEDC_INTR_DISABLE;
+    ledc_ch.hpoint     = 0;
+    ledc_ch.timer_sel  = LEDC_TIMER;
+    ledc_channel_config(&ledc_ch);
+}
+
 static void load_nvs_configuration(void) {
     nvs_handle_t h;
     if (nvs_open("servo_cal", NVS_READONLY, &h) == ESP_OK) {
         int32_t o1 = 0, o2 = 0, o3 = 0, o4 = 0, idle = 0, smin = 0, smax = 180;
+        int32_t p1 = -1, p2 = -1, p3 = -1, p4 = -1;
+
         if (nvs_get_i32(h, "off_0", &o1) == ESP_OK) s_offsets[0] = (int)o1;
         if (nvs_get_i32(h, "off_1", &o2) == ESP_OK) s_offsets[1] = (int)o2;
         if (nvs_get_i32(h, "off_2", &o3) == ESP_OK) s_offsets[2] = (int)o3;
@@ -128,6 +147,12 @@ static void load_nvs_configuration(void) {
         if (nvs_get_i32(h, "scis_min", &smin) == ESP_OK) s_scissor_min = (int)smin;
         if (nvs_get_i32(h, "scis_max", &smax) == ESP_OK) s_scissor_max = (int)smax;
         if (nvs_get_i32(h, "auto_idle", &idle) == ESP_OK) s_auto_idle = (idle != 0);
+
+        if (nvs_get_i32(h, "pin_0", &p1) == ESP_OK && p1 >= 0 && p1 < GPIO_NUM_MAX) s_servo_pins[0] = (gpio_num_t)p1;
+        if (nvs_get_i32(h, "pin_1", &p2) == ESP_OK && p2 >= 0 && p2 < GPIO_NUM_MAX) s_servo_pins[1] = (gpio_num_t)p2;
+        if (nvs_get_i32(h, "pin_2", &p3) == ESP_OK && p3 >= 0 && p3 < GPIO_NUM_MAX) s_servo_pins[2] = (gpio_num_t)p3;
+        if (nvs_get_i32(h, "pin_3", &p4) == ESP_OK && p4 >= 0 && p4 < GPIO_NUM_MAX) s_servo_pins[3] = (gpio_num_t)p4;
+
         nvs_close(h);
     }
 
@@ -354,21 +379,48 @@ void servo_controller_init(void) {
 
     for (int i = 0; i < SERVO_COUNT; i++) {
         s_enabled[i] = false;
-        ledc_channel_config_t ledc_ch = {};
-        ledc_ch.channel    = LEDC_CHANNELS[i];
-        ledc_ch.duty       = 0;
-        ledc_ch.gpio_num   = SERVO_PINS[i];
-        ledc_ch.speed_mode = LEDC_MODE;
-        ledc_ch.intr_type  = LEDC_INTR_DISABLE;
-        ledc_ch.hpoint     = 0;
-        ledc_ch.timer_sel  = LEDC_TIMER;
-        ESP_ERROR_CHECK(ledc_channel_config(&ledc_ch));
+        reconfig_ledc_channel(i);
     }
 
     s_last_activity_us = esp_timer_get_time();
 
     xTaskCreatePinnedToCore(auto_idle_monitor_task, "auto_idle_task", 3072, NULL, 2, NULL, 1);
-    ESP_LOGI(TAG, "4-Axis Servo controller initialized: S1=GP1, S2=GP38, S3=GP39, S4(Scissor)=GP12.");
+    ESP_LOGI(TAG, "4-Axis Servo controller ready: S1=GP%d, S2=GP%d, S3=GP%d, S4(Scissor)=GP%d.",
+             s_servo_pins[0], s_servo_pins[1], s_servo_pins[2], s_servo_pins[3]);
+}
+
+void servo_set_pins(int p1, int p2, int p3, int p4) {
+    portENTER_CRITICAL(&s_servo_mux);
+    if (p1 >= 0 && p1 < GPIO_NUM_MAX) s_servo_pins[0] = (gpio_num_t)p1;
+    if (p2 >= 0 && p2 < GPIO_NUM_MAX) s_servo_pins[1] = (gpio_num_t)p2;
+    if (p3 >= 0 && p3 < GPIO_NUM_MAX) s_servo_pins[2] = (gpio_num_t)p3;
+    if (p4 >= 0 && p4 < GPIO_NUM_MAX) s_servo_pins[3] = (gpio_num_t)p4;
+    portEXIT_CRITICAL(&s_servo_mux);
+
+    for (int i = 0; i < SERVO_COUNT; i++) {
+        reconfig_ledc_channel(i);
+    }
+
+    nvs_handle_t h;
+    if (nvs_open("servo_cal", NVS_READWRITE, &h) == ESP_OK) {
+        nvs_set_i32(h, "pin_0", s_servo_pins[0]);
+        nvs_set_i32(h, "pin_1", s_servo_pins[1]);
+        nvs_set_i32(h, "pin_2", s_servo_pins[2]);
+        nvs_set_i32(h, "pin_3", s_servo_pins[3]);
+        nvs_commit(h);
+        nvs_close(h);
+    }
+    ESP_LOGI(TAG, "Servo pins remapped: S1=GP%d, S2=GP%d, S3=GP%d, S4=GP%d",
+             s_servo_pins[0], s_servo_pins[1], s_servo_pins[2], s_servo_pins[3]);
+}
+
+void servo_get_pins(int *p1, int *p2, int *p3, int *p4) {
+    portENTER_CRITICAL(&s_servo_mux);
+    if (p1) *p1 = s_servo_pins[0];
+    if (p2) *p2 = s_servo_pins[1];
+    if (p3) *p3 = s_servo_pins[2];
+    if (p4) *p4 = s_servo_pins[3];
+    portEXIT_CRITICAL(&s_servo_mux);
 }
 
 void servo_set_angle(int idx, int angle) {
@@ -694,4 +746,3 @@ bool servo_run_sequence_str(const char *seq_str, bool loop) {
     xTaskCreatePinnedToCore(sequence_runner_task, "seq_run_task", 4096, NULL, 5, &s_seq_task_handle, 1);
     return true;
 }
-

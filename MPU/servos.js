@@ -1,5 +1,6 @@
 let servoAngles = [90, 90, 90, 90];
 let servoOffsets = [0, 0, 0, 0];
+let servoPins = [1, 38, 39, 12];
 let servoEnabled = [false, false, false, false];
 let autoIdleEnabled = false;
 let servoNames = ["Servo 1 — Claw", "Servo 2 — Arm", "Servo 3 — Shoulder", "Servo 4 — Scissor Lift"];
@@ -84,6 +85,28 @@ function updateServoStateBadges() {
       badge.style.borderColor = "rgba(148,163,184,0.3)";
     }
   }
+}
+
+function updatePinDisplay() {
+  const p1Lbl = document.getElementById("s1-pin-label");
+  const p2Lbl = document.getElementById("s2-pin-label");
+  const p3Lbl = document.getElementById("s3-pin-label");
+  const p4Lbl = document.getElementById("s4-pin-label");
+
+  if (p1Lbl) p1Lbl.innerText = `GP${servoPins[0]}`;
+  if (p2Lbl) p2Lbl.innerText = `GP${servoPins[1]}`;
+  if (p3Lbl) p3Lbl.innerText = `GP${servoPins[2]}`;
+  if (p4Lbl) p4Lbl.innerText = `GP${servoPins[3]}`;
+
+  const inp1 = document.getElementById("pin-s1-input");
+  const inp2 = document.getElementById("pin-s2-input");
+  const inp3 = document.getElementById("pin-s3-input");
+  const inp4 = document.getElementById("pin-s4-input");
+
+  if (inp1) inp1.value = servoPins[0];
+  if (inp2) inp2.value = servoPins[1];
+  if (inp3) inp3.value = servoPins[2];
+  if (inp4) inp4.value = servoPins[3];
 }
 
 function updateScissorUI() {
@@ -173,6 +196,7 @@ function updateAllServoUI() {
 
   updateScissorUI();
   updateServoStateBadges();
+  updatePinDisplay();
 }
 
 function editServoName(idx) {
@@ -279,7 +303,7 @@ function onSliderCommit(idx, val) {
   }
 }
 
-// Scissor Lift UI Handlers (Servo 4 / GPIO 12)
+// Scissor Lift UI Handlers (Servo 4 / Default GPIO 12)
 function onLiftSliderStart() {
   isDraggingLift = true;
   lastSliderEditMs[3] = Date.now();
@@ -593,6 +617,35 @@ function requestStatusSync() {
   showToast("Syncing arm & scissor state...", "info");
 }
 
+function requestPinSync() {
+  sendCommand("pins");
+  showToast("Fetching hardware pin configuration...", "info");
+}
+
+function saveHardwarePins() {
+  const p1 = parseInt(document.getElementById("pin-s1-input")?.value, 10);
+  const p2 = parseInt(document.getElementById("pin-s2-input")?.value, 10);
+  const p3 = parseInt(document.getElementById("pin-s3-input")?.value, 10);
+  const p4 = parseInt(document.getElementById("pin-s4-input")?.value, 10);
+
+  if (isNaN(p1) || isNaN(p2) || isNaN(p3) || isNaN(p4)) {
+    showToast("Invalid GPIO numbers entered", "error");
+    return;
+  }
+
+  servoPins = [p1, p2, p3, p4];
+  updatePinDisplay();
+  sendCommand(`pins ${p1} ${p2} ${p3} ${p4}`);
+  appendLog("Config", `Saved Hardware Pins: S1=${p1}, S2=${p2}, S3=${p3}, S4=${p4}`);
+  showToast(`Hardware pins applied: S1=${p1}, S2=${p2}, S3=${p3}, S4=${p4}`, "success");
+}
+
+function applyReceivedPins(p1, p2, p3, p4) {
+  if (isNaN(p1) || isNaN(p2) || isNaN(p3) || isNaN(p4)) return;
+  servoPins = [p1, p2, p3, p4];
+  updatePinDisplay();
+}
+
 function applyReceivedAngles(s1, s2, s3, s4, forceSync = false) {
   const incoming = [s1, s2, s3, (s4 !== undefined ? s4 : servoAngles[3])];
   const now = Date.now();
@@ -647,4 +700,3 @@ function applyReceivedEnableStates(e1, e2, e3, e4) {
   servoEnabled = [!!e1, !!e2, !!e3, (e4 !== undefined ? !!e4 : servoEnabled[3])];
   updateServoStateBadges();
 }
-

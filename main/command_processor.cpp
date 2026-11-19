@@ -35,7 +35,6 @@ static bool parse_bool_arg(const char *s) {
     return (strcasecmp(s, "on") == 0 || strcmp(s, "1") == 0 || strcasecmp(s, "true") == 0);
 }
 
-// Determines if a command is a manual positioning command that should override automatic MPU control
 static bool is_manual_motion_cmd(const char *cmd) {
     if (!cmd) return false;
     if ((cmd[0] == 's' || cmd[0] == 'S') && (cmd[1] >= '1' && cmd[1] <= '4')) return true;
@@ -66,7 +65,7 @@ static void release_mpu_control(command_print_fn_t print_fn) {
 #endif
 
 void command_processor_init(void) {
-    ESP_LOGI(TAG, "Command Processor Initialized for [%s] (4-Axis Arm & Scissor Lift on GP12)", NODE_ROLE_NAME);
+    ESP_LOGI(TAG, "Command Processor Initialized for [%s]", NODE_ROLE_NAME);
 }
 
 size_t command_build_status(char *buf, size_t len) {
@@ -153,20 +152,16 @@ void command_process(const char *cmd_line, command_print_fn_t print_fn) {
     }
 
     if (strcmp(p, "help") == 0 || strcmp(p, "?") == 0) {
-        print_fn("YD-ESP32-S3 4-Axis Arm & Scissor Lift Controller (ESP-NOW):\n"
-                 "  espnow                               : Print ESP-NOW pairing and RSSI state\n"
+        print_fn("YD-ESP32-S3 Arm & Scissor Controller (ESP-NOW):\n"
+                 "  espnow                               : Print ESP-NOW pairing state\n"
                  "  mpu <on|off>                         : BLE telemetry stream\n"
-                 "  mpu_read / mpu_get                   : IMU raw telemetry / state\n"
-                 "  mpu_cal <gyro|accel|neutral|yaw|clear>: Calibrate MPU\n"
-                 "  mpu_ctrl <on|off>                    : Wireless MPU-to-Arm control\n"
-                 "  claw <0-180|open|close>              : Claw gripper (S1, GP1)\n"
-                 "  arm <0-180> / shoulder <0-180>       : Joint angles (S2 GP38, S3 GP39)\n"
-                 "  scissor <0-180> / s4 <0-180>         : Scissor lift angle (S4, GP12)\n"
-                 "  lift <0-100>                         : Scissor lift percentage\n"
-                 "  range_set <min> <max> / range_get    : Scissor lift end-stop trim\n"
-                 "  s1..s4 <deg>                         : Move individual servo\n"
+                 "  mpu_ctrl <on|off>                    : MPU Motion Control\n"
+                 "  s1..s4 <0-180>                       : Direct servo angles\n"
+                 "  claw <0-180|open|close>              : Claw gripper (S1)\n"
+                 "  arm <0-180> / shoulder <0-180>       : Joint angles (S2, S3)\n"
+                 "  scissor <0-180> / lift <0-100>       : Scissor lift angle/percent (S4)\n"
+                 "  pins <p1> <p2> <p3> <p4>             : Remap servo GPIO pins\n"
                  "  home / min / max / mid / stop        : Quick presets\n"
-                 "  detach / attach                      : Power management\n"
                  "  status                               : Full system telemetry\n");
         return;
     }
@@ -175,6 +170,39 @@ void command_process(const char *cmd_line, command_print_fn_t print_fn) {
         print_fn("Rebooting ESP32-S3...\n");
         vTaskDelay(pdMS_TO_TICKS(100));
         esp_restart();
+        return;
+    }
+
+    // Dynamic Hardware Pin Mapping: "pins <p1> <p2> <p3> <p4>" or "pins"
+    if (strncmp(p, "pins ", 5) == 0) {
+        int p1 = -1, p2 = -1, p3 = -1, p4 = -1;
+        if (sscanf(p + 5, "%d %d %d %d", &p1, &p2, &p3, &p4) == 4) {
+#if NODE_IS_RECEIVER
+            servo_set_pins(p1, p2, p3, p4);
+            char resp[64];
+            snprintf(resp, sizeof(resp), "PINS:%d,%d,%d,%d\n", p1, p2, p3, p4);
+            print_fn(resp);
+#elif NODE_IS_SENDER
+            if (espnow_sync_is_paired()) {
+                espnow_sync_send_cmd(p);
+            }
+#endif
+            return;
+        }
+    }
+
+    if (strcmp(p, "pins") == 0) {
+        int p1 = 1, p2 = 38, p3 = 39, p4 = 12;
+#if NODE_IS_RECEIVER
+        servo_get_pins(&p1, &p2, &p3, &p4);
+        char resp[64];
+        snprintf(resp, sizeof(resp), "PINS:%d,%d,%d,%d\n", p1, p2, p3, p4);
+        print_fn(resp);
+#elif NODE_IS_SENDER
+        if (espnow_sync_is_paired()) {
+            espnow_sync_send_cmd("pins");
+        }
+#endif
         return;
     }
 
@@ -271,7 +299,6 @@ void command_process(const char *cmd_line, command_print_fn_t print_fn) {
     }
 
 #if NODE_IS_SENDER
-    // On MPU Sender: forward movement, scissor lift, joint angles, and programmable actions over ESP-NOW to Receiver
     if (is_manual_motion_cmd(p)) {
         release_mpu_control(print_fn);
     }
@@ -287,7 +314,7 @@ void command_process(const char *cmd_line, command_print_fn_t print_fn) {
         return;
     }
 #else
-    // ---------------- Arm & Scissor Receiver: Local Servo Execution ----------------
+    // ---------------- Arm & Scissor Receiver Execution ----------------
     if (strncmp(p, "claw ", 5) == 0) {
         const char *arg = p + 5;
         int angle = -1;
@@ -328,7 +355,6 @@ void command_process(const char *cmd_line, command_print_fn_t print_fn) {
         }
     }
 
-    // Scissor Lift MG996R on GPIO 12 direct angle control
     if (strncmp(p, "scissor ", 8) == 0) {
         int angle = atoi(p + 8);
         if (angle >= SERVO_MIN_ANGLE && angle <= SERVO_MAX_ANGLE) {
@@ -340,7 +366,6 @@ void command_process(const char *cmd_line, command_print_fn_t print_fn) {
         }
     }
 
-    // Scissor Lift proportional percentage control: "lift <0-100>"
     if (strncmp(p, "lift ", 5) == 0) {
         int pct = atoi(p + 5);
         servo_set_scissor_percent(pct);
@@ -350,7 +375,6 @@ void command_process(const char *cmd_line, command_print_fn_t print_fn) {
         return;
     }
 
-    // Scissor Lift range end-stop settings: "range_set <min> <max>"
     if (strncmp(p, "range_set ", 10) == 0) {
         int mn = 0, mx = 180;
         if (sscanf(p + 10, "%d %d", &mn, &mx) == 2) {
@@ -372,7 +396,6 @@ void command_process(const char *cmd_line, command_print_fn_t print_fn) {
         return;
     }
 
-    // Individual servo channel direct angle command: "s1 <deg>" .. "s4 <deg>"
     if ((p[0] == 's' || p[0] == 'S') && (p[1] >= '1' && p[1] <= '4') && (p[2] == ' ' || p[2] == ':')) {
         int idx = p[1] - '1';
         int angle = atoi(p + 3);
@@ -390,7 +413,6 @@ void command_process(const char *cmd_line, command_print_fn_t print_fn) {
         }
     }
 
-    // Set all servos immediately: "set <s1> <s2> <s3> [s4]"
     if (strncmp(p, "set ", 4) == 0) {
         int s1 = 90, s2 = 90, s3 = 90, s4 = servo_get_angle(3);
         int matched = sscanf(p + 4, "%d %d %d %d", &s1, &s2, &s3, &s4);
@@ -405,29 +427,27 @@ void command_process(const char *cmd_line, command_print_fn_t print_fn) {
         return;
     }
 
-    // Smooth movement command: "move <s1> <s2> <s3> [s4] [duration_ms]"
     if (strncmp(p, "move ", 5) == 0) {
         int s1 = 90, s2 = 90, s3 = 90, s4 = servo_get_angle(3), dur = 400;
         int n = sscanf(p + 5, "%d %d %d %d %d", &s1, &s2, &s3, &s4, &dur);
         if (n == 4) {
-            // Could be: move s1 s2 s3 dur OR move s1 s2 s3 s4
             dur = s4;
             s4 = servo_get_angle(3);
             servo_move_smooth(s1, s2, s3, s4, dur);
             char msg[96];
-            snprintf(msg, sizeof(msg), ">> Moving smoothly to (%d, %d, %d, %d) over %dms\n", s1, s2, s3, s4, dur);
+            snprintf(msg, sizeof(msg), ">> Moving to (%d, %d, %d, %d) over %dms\n", s1, s2, s3, s4, dur);
             print_fn(msg);
             return;
         } else if (n >= 5) {
             servo_move_smooth(s1, s2, s3, s4, dur);
             char msg[96];
-            snprintf(msg, sizeof(msg), ">> Moving smoothly to (%d, %d, %d, %d) over %dms\n", s1, s2, s3, s4, dur);
+            snprintf(msg, sizeof(msg), ">> Moving to (%d, %d, %d, %d) over %dms\n", s1, s2, s3, s4, dur);
             print_fn(msg);
             return;
         } else if (n == 3) {
             servo_move_smooth(s1, s2, s3, s4, 400);
             char msg[96];
-            snprintf(msg, sizeof(msg), ">> Moving smoothly to (%d, %d, %d, %d) over 400ms\n", s1, s2, s3, s4);
+            snprintf(msg, sizeof(msg), ">> Moving to (%d, %d, %d, %d) over 400ms\n", s1, s2, s3, s4);
             print_fn(msg);
             return;
         } else {
@@ -456,7 +476,6 @@ void command_process(const char *cmd_line, command_print_fn_t print_fn) {
         return;
     }
 
-    // Scissor presets
     if (strcmp(p, "min") == 0) {
         int mn = 0, mx = 180;
         servo_get_scissor_range(&mn, &mx);

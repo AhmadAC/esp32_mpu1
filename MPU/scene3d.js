@@ -11,7 +11,7 @@ const Scene3D = (function () {
   let mode = "arm"; // "arm" | "imu"
   let camAz = -38 * DEG;
   let camEl = 24 * DEG;
-  let camDist = 8.2;
+  let camDist = 8.8;
   let dragId = null;
   let dragX = 0;
   let dragY = 0;
@@ -23,7 +23,6 @@ const Scene3D = (function () {
   const shown = { roll: 0, pitch: 0, yaw: 0 };
   const target = { roll: 0, pitch: 0, yaw: 0 };
 
-  // ---------- vector / matrix helpers (matrices: row-major 3x3) ----------
   function add(a, b) { return [a[0] + b[0], a[1] + b[1], a[2] + b[2]]; }
   function sub(a, b) { return [a[0] - b[0], a[1] - b[1], a[2] - b[2]]; }
   function scale(a, k) { return [a[0] * k, a[1] * k, a[2] * k]; }
@@ -55,14 +54,12 @@ const Scene3D = (function () {
   function rotY(a) { const c = Math.cos(a), s = Math.sin(a); return [c, 0, s, 0, 1, 0, -s, 0, c]; }
   function rotZ(a) { const c = Math.cos(a), s = Math.sin(a); return [c, -s, 0, s, c, 0, 0, 0, 1]; }
 
-  // Upright standing frame: Yaw rotates around Z, Pitch rotates around Y, Roll rotates around X
   function eulerToR(rollDeg, pitchDeg, yawDeg) {
     return mm(rotZ(yawDeg * DEG), mm(rotY(pitchDeg * DEG), rotX(rollDeg * DEG)));
   }
 
-  // ---------- camera ----------
   function camera() {
-    const target3 = mode === "arm" ? [0.8, 0, -0.1] : [0, 0, 0];
+    const target3 = mode === "arm" ? [0.8, 0, 0.1] : [0, 0, 0];
     const pos = add(target3, [
       camDist * Math.cos(camEl) * Math.cos(camAz),
       camDist * Math.cos(camEl) * Math.sin(camAz),
@@ -86,7 +83,6 @@ const Scene3D = (function () {
     ];
   }
 
-  // ---------- geometry builders (return arrays of polygons) ----------
   function boxPolys(center, R, half, color) {
     const sgn = [
       [-1, -1, -1], [1, -1, -1], [1, 1, -1], [-1, 1, -1],
@@ -211,36 +207,28 @@ const Scene3D = (function () {
     const polys = [];
     const o = [0, 0, 0.4];
 
-    // Main PCB (Dark Blue GY-521 board)
     polys.push(...withOutward(boxPolys(o, R, [0.04, 1.05, 0.8], [18, 55, 115]), o));
 
-    // Two Top Mounting Holes
     for (const side of [-1, 1]) {
       const hole = add(o, mv(R, [0, side * 0.82, 0.55]));
       polys.push(...withOutward(prismPolys(hole, mm(R, rotY(Math.PI / 2)), 0.12, 0.05, 12, [212, 175, 55]), hole));
     }
 
-    // Central MPU-6050 IC chip
     const chipC = add(o, mv(R, [0.06, 0.0, 0.0]));
     polys.push(...withOutward(boxPolys(chipC, R, [0.03, 0.32, 0.32], [28, 32, 38]), chipC));
 
-    // IC Pin 1 Orientation Dot
     const dotC = add(o, mv(R, [0.09, -0.22, 0.22]));
     polys.push(...withOutward(boxPolys(dotC, R, [0.01, 0.04, 0.04], [220, 220, 220]), dotC));
 
-    // Green Power LED
     const ledC = add(o, mv(R, [0.06, 0.65, -0.2]));
     polys.push(...withOutward(boxPolys(ledC, R, [0.03, 0.08, 0.08], [34, 197, 94]), ledC));
 
-    // Small 3.3V Onboard LDO Regulator
     const regC = add(o, mv(R, [0.06, 0.0, 0.52]));
     polys.push(...withOutward(boxPolys(regC, R, [0.02, 0.18, 0.12], [47, 55, 69]), regC));
 
-    // Black plastic pin header along bottom edge
     const headerC = add(o, mv(R, [-0.12, 0.0, -0.8]));
     polys.push(...withOutward(boxPolys(headerC, R, [0.12, 1.02, 0.12], [15, 23, 42]), headerC));
 
-    // 8 Right-Angle Bent Pins
     for (let i = 0; i < 8; i++) {
       const yPos = -0.875 + i * 0.25;
       const pinLeg = add(o, mv(R, [-0.3, yPos, -0.8]));
@@ -252,38 +240,76 @@ const Scene3D = (function () {
     return polys;
   }
 
+  // 4-Axis Arm + Scissor Lift geometry
   function buildArm(angles, geom) {
-    const s1 = angles[0], s2 = angles[1], s3 = angles[2];
+    const s1 = angles[0] !== undefined ? angles[0] : 90;
+    const s2 = angles[1] !== undefined ? angles[1] : 90;
+    const s3 = angles[2] !== undefined ? angles[2] : 90;
+    const s4 = angles[3] !== undefined ? angles[3] : 90;
+
     const polys = [];
     const I = [1, 0, 0, 0, 1, 0, 0, 0, 1];
-    const groundZ = -1.55;
+    const groundZ = -1.65;
 
-    const basePlate = [0, 0, groundZ + 0.1];
-    polys.push(...withOutward(boxPolys(basePlate, I, [1.25, 1.0, 0.1], [71, 85, 105]), basePlate));
-    const pedestal = [0, 0, groundZ + 0.1 + 0.55];
-    polys.push(...withOutward(boxPolys(pedestal, I, [0.42, 0.42, 0.55], [100, 116, 139]), pedestal));
+    // Fixed bottom plate resting on ground
+    const groundPlate = [0, 0, groundZ + 0.08];
+    polys.push(...withOutward(boxPolys(groundPlate, I, [1.35, 1.15, 0.08], [47, 55, 69]), groundPlate));
 
-    const S = [0, 0, groundZ + 0.1 + 1.1];
+    // Scissor lift vertical elevation driven by S4 (0-180 deg -> 0.0 to 1.1 units)
+    const scissorNorm = Math.max(0, Math.min(180, s4)) / 180.0;
+    const liftH = scissorNorm * 1.1;
+
+    // Scissor linkage struts (crossed scissor arms that expand/contract)
+    const scissorMidZ = groundZ + 0.16 + liftH * 0.5;
+    const strutAngle = 0.22 + scissorNorm * 0.52;
+    const strutHalf = 0.42;
+
+    for (const side of [-0.62, 0.62]) {
+      const R1 = rotY(strutAngle);
+      const R2 = rotY(-strutAngle);
+      const c1 = [0, side, scissorMidZ];
+      const c2 = [0, side, scissorMidZ];
+      polys.push(...withOutward(boxPolys(c1, R1, [0.05, 0.035, strutHalf], [234, 179, 8]), c1));
+      polys.push(...withOutward(boxPolys(c2, R2, [0.05, 0.035, strutHalf], [202, 138, 4]), c2));
+    }
+
+    // Elevated arm mounting stage (rises with scissor lift)
+    const platformZ = groundZ + 0.16 + liftH;
+    const upperPlatform = [0, 0, platformZ + 0.09];
+    polys.push(...withOutward(boxPolys(upperPlatform, I, [1.25, 1.0, 0.09], [71, 85, 105]), upperPlatform));
+
+    // Turntable pedestal on top of the scissor platform
+    const pedestal = [0, 0, platformZ + 0.09 + 0.45];
+    polys.push(...withOutward(boxPolys(pedestal, I, [0.42, 0.42, 0.45], [100, 116, 139]), pedestal));
+
+    // Shoulder joint S
+    const S = [0, 0, platformZ + 0.09 + 0.9];
     polys.push(...withOutward(prismPolys(S, I, 0.34, 0.46, 14, [245, 158, 11]), S));
 
+    // Upper arm link (Shoulder rotation via S3)
     const phi1 = (s3 - 90) * DEG;
     const R1 = rotY(phi1);
     const L1 = geom.l1;
     const c1 = add(S, mv(R1, [0, 0, L1 / 2]));
     polys.push(...withOutward(boxPolys(c1, R1, [0.2, 0.2, L1 / 2], [56, 189, 248]), c1));
+
+    // Elbow joint E
     const E = add(S, mv(R1, [0, 0, L1]));
     polys.push(...withOutward(prismPolys(E, I, 0.27, 0.34, 14, [245, 158, 11]), E));
 
+    // Forearm link (Arm rotation via S2)
     const phi2 = phi1 + (90 + (s2 - 90)) * DEG;
     const R2 = rotY(phi2);
     const L2 = geom.l2;
     const c2 = add(E, mv(R2, [0, 0, L2 / 2]));
     polys.push(...withOutward(boxPolys(c2, R2, [0.16, 0.16, L2 / 2], [14, 165, 233]), c2));
-    const W = add(E, mv(R2, [0, 0, L2]));
 
+    // Wrist W & Claw palm
+    const W = add(E, mv(R2, [0, 0, L2]));
     const palm = add(W, mv(R2, [0, 0, 0.14]));
     polys.push(...withOutward(boxPolys(palm, R2, [0.2, 0.42, 0.14], [100, 116, 139]), palm));
 
+    // Gripper fingers (Claw aperture via S1)
     const open = Math.max(0, Math.min(180, s1)) / 180 * 50 * DEG;
     for (const side of [-1, 1]) {
       const Rf = mm(R2, rotX(-side * open));
@@ -291,17 +317,16 @@ const Scene3D = (function () {
       const fc = add(base, mv(Rf, [0, 0, 0.4]));
       polys.push(...withOutward(boxPolys(fc, Rf, [0.09, 0.07, 0.4], [52, 211, 153]), fc));
     }
+
     return { polys, groundZ, S, E, W };
   }
 
-  // ---------- frame ----------
   function smoothAngle(cur, tgt, wrap) {
     let d = tgt - cur;
     if (wrap) {
       while (d > 180) d -= 360;
       while (d < -180) d += 360;
     }
-    // Snap tightly when stationary to prevent phantom visual creep
     if (isStationary && Math.abs(d) < 0.2) return tgt;
     return cur + d * 0.35;
   }
@@ -331,7 +356,7 @@ const Scene3D = (function () {
       drawPolys(cam, buildImuBoard(R));
       drawAxes(cam, [0, 0, 0.4], R, 1.6, 2.4, 0.95, true);
     } else {
-      const angles = (typeof servoAngles !== "undefined") ? servoAngles : [90, 90, 90];
+      const angles = (typeof servoAngles !== "undefined") ? servoAngles : [90, 90, 90, 90];
       const arm = buildArm(angles, { l1: 1.7, l2: 1.45 });
       drawGrid(cam, arm.groundZ, 3, 1);
       drawAxes(cam, [0, 0, arm.groundZ], I, 1.2, 1.4, 0.35, true);
@@ -359,7 +384,6 @@ const Scene3D = (function () {
     canvas.height = Math.floor(h * dpr);
   }
 
-  // ---------- interaction ----------
   function onPointerDown(e) {
     canvas.setPointerCapture(e.pointerId);
     pinch[e.pointerId] = { x: e.clientX, y: e.clientY };
@@ -399,7 +423,6 @@ const Scene3D = (function () {
     camDist = Math.max(3.5, Math.min(14, camDist * (1 + e.deltaY * 0.001)));
   }
 
-  // ---------- public API ----------
   function init(canvasEl) {
     canvas = canvasEl;
     if (!canvas) return;
@@ -436,7 +459,7 @@ const Scene3D = (function () {
   function resetView() {
     camAz = -38 * DEG;
     camEl = 24 * DEG;
-    camDist = 8.2;
+    camDist = 8.8;
   }
 
   return { init, resize, setOrientation, setMode, getMode, resetView };

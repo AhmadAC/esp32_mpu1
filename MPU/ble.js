@@ -285,13 +285,14 @@ function onConnectedSuccess(name) {
     sendCommand("status");
     setTimeout(() => sendCommand("espnow_get"), 250);
     setTimeout(() => sendCommand("action_get"), 500);
-    setTimeout(() => sendCommand("mpu_get"), 750);
-    setTimeout(() => sendCommand("mpu on"), 1000);
+    setTimeout(() => sendCommand("pins"), 750);
+    setTimeout(() => sendCommand("mpu_get"), 1000);
+    setTimeout(() => sendCommand("mpu on"), 1250);
     setTimeout(async () => {
       if (isConnected && rxCount === 0) {
         await tryFallbackBleRead();
       }
-    }, 1500);
+    }, 1700);
   }, 450);
 }
 
@@ -315,7 +316,7 @@ async function onDisconnectedCleanup() {
     appendLog("BLE", "Device disconnected.");
   }
   if (typeof applyReceivedEnableStates === "function") {
-    applyReceivedEnableStates(false, false, false);
+    applyReceivedEnableStates(false, false, false, false);
   }
   if (typeof updateActionRunBadge === "function") {
     updateActionRunBadge(false, 0, false);
@@ -332,9 +333,11 @@ function getCoalesceKey(cmd) {
   if (cmd.startsWith("s1 ")) return "s1";
   if (cmd.startsWith("s2 ")) return "s2";
   if (cmd.startsWith("s3 ")) return "s3";
+  if (cmd.startsWith("s4 ")) return "s4";
   if (cmd.startsWith("offset s1 ")) return "o1";
   if (cmd.startsWith("offset s2 ")) return "o2";
   if (cmd.startsWith("offset s3 ")) return "o3";
+  if (cmd.startsWith("offset s4 ")) return "o4";
   if (cmd === "status") return "status";
   if (cmd.startsWith("mpu_gain ")) return "mpugain";
   return null;
@@ -428,7 +431,7 @@ async function executeSendCommand(commandText) {
     consecutiveWriteErrors = 0;
     txCount++;
     updateCounterDisplay();
-    if (!commandText.startsWith("s1 ") && !commandText.startsWith("s2 ") && !commandText.startsWith("s3 ") && commandText !== "status") {
+    if (!commandText.startsWith("s1 ") && !commandText.startsWith("s2 ") && !commandText.startsWith("s3 ") && !commandText.startsWith("s4 ") && commandText !== "status") {
       appendLog("TX", commandText);
     }
   } catch (err) {
@@ -488,6 +491,7 @@ function universalBleDecode(val) {
       if (hexDecoded && (/^[\x20-\x7E\r\n\t]+$/.test(hexDecoded) ||
           hexDecoded.includes("STATUS:") || hexDecoded.includes("ANG:") ||
           hexDecoded.includes("CAL:") || hexDecoded.includes("ACT:") ||
+          hexDecoded.includes("RANGE:") || hexDecoded.includes("PINS:") ||
           hexDecoded.includes("ACT_STATE:") || hexDecoded.includes("SERVO_EN:") ||
           hexDecoded.includes("AUTO_IDLE:") || hexDecoded.includes("IMU:") ||
           hexDecoded.includes("MPUCAL:") || hexDecoded.includes("ESPNOW:") ||
@@ -501,6 +505,7 @@ function universalBleDecode(val) {
       if (b64Decoded && (/^[\x20-\x7E\r\n\t]+$/.test(b64Decoded) ||
           b64Decoded.includes("STATUS:") || b64Decoded.includes("ANG:") ||
           b64Decoded.includes("CAL:") || b64Decoded.includes("ACT:") ||
+          b64Decoded.includes("RANGE:") || b64Decoded.includes("PINS:") ||
           b64Decoded.includes("ACT_STATE:") || b64Decoded.includes("SERVO_EN:") ||
           b64Decoded.includes("AUTO_IDLE:") || b64Decoded.includes("IMU:") ||
           b64Decoded.includes("MPUCAL:") || b64Decoded.includes("ESPNOW:"))) {
@@ -545,17 +550,33 @@ function handleIncomingBleData(rawText, sourceTag = "BLE") {
     }
 
     if (text.startsWith("ANG:")) {
-      const vals = text.substring(4).split(",");
+      const vals = text.substring(4).split(",").map(n => parseInt(n.trim(), 10));
       if (vals.length >= 3 && typeof applyReceivedAngles === "function") {
-        applyReceivedAngles(parseInt(vals[0], 10), parseInt(vals[1], 10), parseInt(vals[2], 10));
+        applyReceivedAngles(vals[0], vals[1], vals[2], vals[3]);
       }
       return;
     }
 
     if (text.startsWith("SERVO_EN:")) {
-      const vals = text.substring(9).split(",");
+      const vals = text.substring(9).split(",").map(n => n.trim() === "1");
       if (vals.length >= 3 && typeof applyReceivedEnableStates === "function") {
-        applyReceivedEnableStates(vals[0] === "1", vals[1] === "1", vals[2] === "1");
+        applyReceivedEnableStates(vals[0], vals[1], vals[2], vals[3]);
+      }
+      return;
+    }
+
+    if (text.startsWith("PINS:")) {
+      const vals = text.substring(5).split(",").map(n => parseInt(n.trim(), 10));
+      if (vals.length >= 4 && typeof applyReceivedPins === "function") {
+        applyReceivedPins(vals[0], vals[1], vals[2], vals[3]);
+      }
+      return;
+    }
+
+    if (text.startsWith("RANGE:")) {
+      const vals = text.substring(6).split(",").map(n => parseInt(n.trim(), 10));
+      if (vals.length >= 2 && typeof applyReceivedRange === "function") {
+        applyReceivedRange(vals[0], vals[1]);
       }
       return;
     }
@@ -569,9 +590,9 @@ function handleIncomingBleData(rawText, sourceTag = "BLE") {
     }
 
     if (text.startsWith("CAL:")) {
-      const vals = text.substring(4).split(",");
+      const vals = text.substring(4).split(",").map(n => parseInt(n.trim(), 10));
       if (vals.length >= 3 && typeof applyReceivedOffsets === "function") {
-        applyReceivedOffsets(parseInt(vals[0], 10), parseInt(vals[1], 10), parseInt(vals[2], 10));
+        applyReceivedOffsets(vals[0], vals[1], vals[2], vals[3]);
       }
       return;
     }
@@ -601,12 +622,17 @@ function handleIncomingBleData(rawText, sourceTag = "BLE") {
       const ms1 = text.match(/s1=(\d+)/);
       const ms2 = text.match(/s2=(\d+)/);
       const ms3 = text.match(/s3=(\d+)/);
+      const ms4 = text.match(/s4=(\d+)/);
       const mo1 = text.match(/o1=(-?\d+)/);
       const mo2 = text.match(/o2=(-?\d+)/);
       const mo3 = text.match(/o3=(-?\d+)/);
+      const mo4 = text.match(/o4=(-?\d+)/);
+      const mMin = text.match(/min=(\d+)/);
+      const mMax = text.match(/max=(\d+)/);
       const me1 = text.match(/en1=(\d+)/);
       const me2 = text.match(/en2=(\d+)/);
       const me3 = text.match(/en3=(\d+)/);
+      const me4 = text.match(/en4=(\d+)/);
       const mIdle = text.match(/idle=(\d+)/);
       const mRun = text.match(/run=(\d+)/);
       const mAct = text.match(/act=(\d+)/);
@@ -620,14 +646,20 @@ function handleIncomingBleData(rawText, sourceTag = "BLE") {
         showToast("Warning: Battery sag caused brownout reset!", "warn");
       }
 
+      if (mMin && mMax && typeof applyReceivedRange === "function") {
+        applyReceivedRange(parseInt(mMin[1], 10), parseInt(mMax[1], 10));
+      }
       if (ms1 && ms2 && ms3 && typeof applyReceivedAngles === "function") {
-        applyReceivedAngles(parseInt(ms1[1], 10), parseInt(ms2[1], 10), parseInt(ms3[1], 10), true);
+        const s4Val = ms4 ? parseInt(ms4[1], 10) : undefined;
+        applyReceivedAngles(parseInt(ms1[1], 10), parseInt(ms2[1], 10), parseInt(ms3[1], 10), s4Val, true);
       }
       if (mo1 && mo2 && mo3 && typeof applyReceivedOffsets === "function") {
-        applyReceivedOffsets(parseInt(mo1[1], 10), parseInt(mo2[1], 10), parseInt(mo3[1], 10));
+        const o4Val = mo4 ? parseInt(mo4[1], 10) : undefined;
+        applyReceivedOffsets(parseInt(mo1[1], 10), parseInt(mo2[1], 10), parseInt(mo3[1], 10), o4Val);
       }
       if (me1 && me2 && me3 && typeof applyReceivedEnableStates === "function") {
-        applyReceivedEnableStates(me1[1] === "1", me2[1] === "1", me3[1] === "1");
+        const e4Val = me4 ? (me4[1] === "1") : undefined;
+        applyReceivedEnableStates(me1[1] === "1", me2[1] === "1", me3[1] === "1", e4Val);
       }
       if (mIdle && typeof applyAutoIdleState === "function") {
         applyAutoIdleState(mIdle[1] === "1");
@@ -669,6 +701,7 @@ function appendLog(sender, text) {
   if (sender === "Action") senderColor = "#c084fc";
   if (sender === "Trim" || sender === "Calibration" || sender === "MPU") senderColor = "#f59e0b";
   if (sender === "ESPNOW") senderColor = "#a855f7";
+  if (sender === "Config") senderColor = "#818cf8";
   if (sender.includes("Error") || sender.includes("Warn")) senderColor = "#f87171";
   if (sender === "TX") senderColor = "#fbbf24";
 
@@ -690,15 +723,15 @@ function escapeHtml(str) {
 }
 
 function exportTerminalLogs() {
-  const header = `SERVO ARM DIAGNOSTIC LOG\nExported: ${new Date().toISOString()}\nBackend: ${bleBackend || "None"}\nRX: ${rxCount} | TX: ${txCount}\n\n`;
+  const header = `ARM & SCISSOR LIFT DIAGNOSTIC LOG\nExported: ${new Date().toISOString()}\nBackend: ${bleBackend || "None"}\nRX: ${rxCount} | TX: ${txCount}\n\n`;
   const fullText = header + rawLogLines.join("\n");
-  const filename = `servo-arm-log-${new Date().toISOString().replace(/[:.]/g, "-")}.txt`;
+  const filename = `arm-scissor-log-${new Date().toISOString().replace(/[:.]/g, "-")}.txt`;
 
   if (navigator.share && navigator.canShare) {
     try {
       const file = new File([fullText], filename, { type: "text/plain" });
       if (navigator.canShare({ files: [file] })) {
-        navigator.share({ files: [file], title: "Servo Arm Log" }).catch(() => {});
+        navigator.share({ files: [file], title: "Arm & Scissor Log" }).catch(() => {});
         return;
       }
     } catch (e) {}

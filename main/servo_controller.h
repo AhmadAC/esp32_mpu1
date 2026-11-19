@@ -10,17 +10,16 @@ extern "C" {
 #endif
 
 // 4-Axis Robotic Arm & Scissor Lift Servo Mapping:
-// S1: Claw (Gripper) on GPIO 1
-// S2: Arm on GPIO 38
-// S3: Shoulder on GPIO 39
-// S4: Scissor Lift MG996R on GPIO 12
+// S1: Claw (Gripper) - Default GPIO 1
+// S2: Arm            - Default GPIO 38
+// S3: Shoulder       - Default GPIO 39
+// S4: Scissor Lift   - Default GPIO 12
 #define SERVO_COUNT         4
-#define SERVO_1_PIN         GPIO_NUM_1
-#define SERVO_2_PIN         GPIO_NUM_38
-#define SERVO_3_PIN         GPIO_NUM_39
-#define SERVO_4_PIN         GPIO_NUM_12
+#define SERVO_1_PIN_DEFAULT GPIO_NUM_1
+#define SERVO_2_PIN_DEFAULT GPIO_NUM_38
+#define SERVO_3_PIN_DEFAULT GPIO_NUM_39
+#define SERVO_4_PIN_DEFAULT GPIO_NUM_12
 
-// Standard 50Hz PWM timings (500us - 2500us for 0 - 180 degrees)
 #define SERVO_MIN_PULSE_US  500
 #define SERVO_MAX_PULSE_US  2500
 #define SERVO_MIN_US        500
@@ -54,13 +53,17 @@ void servo_set_all(int s1, int s2, int s3, int s4);
 void servo_move_smooth(int s1, int s2, int s3, int s4, int duration_ms);
 void servo_get_all_angles(int *s1, int *s2, int *s3, int *s4);
 
-// Scissor Lift specific range & proportional controls (Servo 4 / GPIO 12)
+// Dynamic Hardware Pin Mapping (Saved to NVS)
+void servo_set_pins(int p1, int p2, int p3, int p4);
+void servo_get_pins(int *p1, int *p2, int *p3, int *p4);
+
+// Scissor Lift specific range & proportional controls (Servo 4)
 void servo_set_scissor_percent(int pct);
 int  servo_get_scissor_percent(void);
 void servo_set_scissor_range(int min_angle, int max_angle);
 void servo_get_scissor_range(int *min_angle, int *max_angle);
 
-// Power / Attach / Detach controls (duty = 0 prevents heating and stall buzz)
+// Power / Attach / Detach controls
 void servo_detach(int idx);
 void servo_detach_all(void);
 void servo_attach(int idx);
