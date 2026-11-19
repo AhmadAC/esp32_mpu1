@@ -27,7 +27,7 @@ extern "C" void app_main(void) {
     }
 
     // Allow battery rail and decoupling capacitors to stabilize before RF calibration
-    vTaskDelay(pdMS_TO_TICKS(250));
+    vTaskDelay(pdMS_TO_TICKS(350));
 
     esp_reset_reason_t rst = esp_reset_reason();
     if (rst == ESP_RST_BROWNOUT) {

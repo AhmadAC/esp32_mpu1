@@ -81,15 +81,9 @@ static uint32_t calc_duty(int angle, int offset) {
 static void apply_hardware_pwm(int idx, int angle, int offset, bool enable) {
     if (idx < 0 || idx >= SERVO_COUNT) return;
 
-    if (enable) {
-        uint32_t duty = calc_duty(angle, offset);
-        ledc_set_duty(LEDC_MODE, LEDC_CHANNELS[idx], duty);
-        ledc_update_duty(LEDC_MODE, LEDC_CHANNELS[idx]);
-    } else {
-        ledc_set_duty(LEDC_MODE, LEDC_CHANNELS[idx], 0);
-        ledc_update_duty(LEDC_MODE, LEDC_CHANNELS[idx]);
-        gpio_set_level(SERVO_PINS[idx], 0);
-    }
+    uint32_t duty = enable ? calc_duty(angle, offset) : 0;
+    ledc_set_duty(LEDC_MODE, LEDC_CHANNELS[idx], duty);
+    ledc_update_duty(LEDC_MODE, LEDC_CHANNELS[idx]);
 }
 
 static void notify_angles(void) {
@@ -315,23 +309,23 @@ void servo_controller_init(void) {
     ledc_timer.clk_cfg          = LEDC_AUTO_CLK;
     ESP_ERROR_CHECK(ledc_timer_config(&ledc_timer));
 
+    // Keep LEDC attached with duty=0 so pins stay steady LOW until explicitly enabled
     for (int i = 0; i < SERVO_COUNT; i++) {
+        s_enabled[i] = false;
         ledc_channel_config_t ledc_ch = {};
         ledc_ch.channel    = LEDC_CHANNELS[i];
         ledc_ch.duty       = 0;
         ledc_ch.gpio_num   = SERVO_PINS[i];
         ledc_ch.speed_mode = LEDC_MODE;
+        ledc_ch.intr_type  = LEDC_INTR_DISABLE;
         ledc_ch.hpoint     = 0;
         ledc_ch.timer_sel  = LEDC_TIMER;
         ESP_ERROR_CHECK(ledc_channel_config(&ledc_ch));
-
-        gpio_set_direction(SERVO_PINS[i], GPIO_MODE_OUTPUT);
-        gpio_set_level(SERVO_PINS[i], 0);
     }
 
     s_last_activity_us = esp_timer_get_time();
 
-    xTaskCreatePinnedToCore(auto_idle_monitor_task, "auto_idle_task", 2048, NULL, 2, NULL, 1);
+    xTaskCreatePinnedToCore(auto_idle_monitor_task, "auto_idle_task", 3072, NULL, 2, NULL, 1);
     ESP_LOGI(TAG, "Servo controller initialized (Claw=GP1, Arm=GP38, Shoulder=GP39). Servos start DETACHED.");
 }
 

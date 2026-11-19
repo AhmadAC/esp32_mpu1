@@ -33,8 +33,8 @@ static const char *TAG = "IMU";
 
 typedef struct {
     uint32_t magic;
-    float    gyro_bias[3];    // deg/s
-    float    accel_bias[3];   // g
+    float    gyro_bias[3];      // deg/s
+    float    accel_bias[3];     // g
     float    neutral_angles[3]; // [roll, pitch, yaw] neutral reference
     uint8_t  gyro_ok;
     uint8_t  accel_ok;
@@ -171,6 +171,18 @@ bool imu_format_line(char *buf, size_t len) {
 static void imu_task(void *pvParameters) {
     (void)pvParameters;
 
+    // Allow NimBLE RF calibration and sensor power rail to settle before starting I2C traffic
+    vTaskDelay(pdMS_TO_TICKS(150));
+
+    s_sensor_ok = mpu6050_init();
+    if (s_sensor_ok) {
+        ESP_LOGI(TAG, "MPU-6050 ready (SDA=GPIO%d, SCL=GPIO%d)", (int)MPU6050_SDA_PIN, (int)MPU6050_SCL_PIN);
+        notify_hw(true);
+    } else {
+        ESP_LOGW(TAG, "MPU-6050 not detected (SDA=GPIO%d, SCL=GPIO%d). Will keep retrying.",
+                 (int)MPU6050_SDA_PIN, (int)MPU6050_SCL_PIN);
+    }
+
     imu_cal_t cal;
     cal_load(&cal);
     cal_share(&cal);
@@ -179,7 +191,7 @@ static void imu_task(void *pvParameters) {
     float roll = 0.0f, pitch = 0.0f, yaw = 0.0f;
 
     int64_t last_us = esp_timer_get_time();
-    int64_t last_probe_us = 0;
+    int64_t last_probe_us = last_us;
     int tele_div = 0;
     int read_fails = 0;
     int still_counter = 0;
@@ -205,10 +217,11 @@ static void imu_task(void *pvParameters) {
                     s_sensor_ok = true;
                     read_fails = 0;
                     initialized = false;
-                    last_us = now_us;
+                    last_us = esp_timer_get_time();
                     ESP_LOGI(TAG, "MPU-6050 online");
                     notify_hw(true);
                 }
+                last_wake = xTaskGetTickCount();
             }
             continue;
         }
@@ -451,14 +464,7 @@ static void imu_task(void *pvParameters) {
 void imu_init(void) {
     memset(&s_pose, 0, sizeof(s_pose));
     cal_defaults(&s_cal_shared);
-    s_sensor_ok = mpu6050_init();
-    if (s_sensor_ok) {
-        ESP_LOGI(TAG, "MPU-6050 ready (SDA=GPIO%d, SCL=GPIO%d)", (int)MPU6050_SDA_PIN, (int)MPU6050_SCL_PIN);
-    } else {
-        ESP_LOGW(TAG, "MPU-6050 not detected (SDA=GPIO%d, SCL=GPIO%d). Will keep retrying.",
-                 (int)MPU6050_SDA_PIN, (int)MPU6050_SCL_PIN);
-    }
-    xTaskCreatePinnedToCore(imu_task, "imu_task", 4096, NULL, 6, NULL, 1);
+    xTaskCreatePinnedToCore(imu_task, "imu_task", 6144, NULL, 6, NULL, 1);
 }
 
 bool imu_get(imu_pose_t *out) {
