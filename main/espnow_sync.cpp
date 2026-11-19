@@ -40,9 +40,10 @@ static portMUX_TYPE s_mux = portMUX_INITIALIZER_UNLOCKED;
 static QueueHandle_t s_espnow_rx_queue = NULL;
 
 // Cached status on MPU Sender received from Arm Receiver
-static int  s_cached_s1 = 90, s_cached_s2 = 90, s_cached_s3 = 90;
-static int  s_cached_o1 = 0,  s_cached_o2 = 0,  s_cached_o3 = 0;
-static bool s_cached_e1 = false, s_cached_e2 = false, s_cached_e3 = false;
+static int  s_cached_s1 = 90, s_cached_s2 = 90, s_cached_s3 = 90, s_cached_s4 = 90;
+static int  s_cached_o1 = 0,  s_cached_o2 = 0,  s_cached_o3 = 0,  s_cached_o4 = 0;
+static int  s_cached_smin = 0, s_cached_smax = 180;
+static bool s_cached_e1 = false, s_cached_e2 = false, s_cached_e3 = false, s_cached_e4 = false;
 static bool s_cached_idle = false, s_cached_run = false, s_cached_loop = false;
 static int  s_cached_slot = 0;
 static bool s_has_cached_status = false;
@@ -79,10 +80,7 @@ static bool send_packet(const uint8_t *dest_mac, espnow_packet_t *pkt) {
 static void process_incoming_packet(const espnow_rx_item_t *item) {
     const espnow_packet_t *pkt = &item->pkt;
 
-    // Discard packets originating from self
     if (memcmp(pkt->sender_mac, s_local_mac, 6) == 0) return;
-
-    // Reject packets from the identical role
     if (pkt->sender_role == (uint8_t)s_local_role) return;
 
     s_last_recv_us = esp_timer_get_time();
@@ -130,14 +128,16 @@ static void process_incoming_packet(const espnow_rx_item_t *item) {
             uint8_t s1 = pkt->payload.servo_set.s1;
             uint8_t s2 = pkt->payload.servo_set.s2;
             uint8_t s3 = pkt->payload.servo_set.s3;
+            uint8_t s4 = pkt->payload.servo_set.s4;
             uint16_t mv = pkt->payload.servo_set.move_ms;
 
             if (mv > 20) {
-                servo_move_smooth(s1, s2, s3, mv);
+                servo_move_smooth(s1, s2, s3, s4, mv);
             } else {
                 servo_set_angle(0, s1);
                 servo_set_angle(1, s2);
                 servo_set_angle(2, s3);
+                servo_set_angle(3, s4);
             }
         }
         break;
@@ -154,7 +154,6 @@ static void process_incoming_packet(const espnow_rx_item_t *item) {
                 s_cmd_handler(cmd_copy);
             }
         } else if (s_local_role == ESPNOW_ROLE_SENDER) {
-            // Forwarded commands received on Sender from Arm (e.g. mpu_ctrl on)
             char cmd_copy[ESPNOW_PAYLOAD_CMD_SZ + 1];
             strncpy(cmd_copy, pkt->payload.cmd_str.cmd, ESPNOW_PAYLOAD_CMD_SZ);
             cmd_copy[ESPNOW_PAYLOAD_CMD_SZ] = '\0';
@@ -170,7 +169,6 @@ static void process_incoming_packet(const espnow_rx_item_t *item) {
             strncpy(reply_copy, pkt->payload.cmd_reply.reply, ESPNOW_PAYLOAD_CMD_SZ);
             reply_copy[ESPNOW_PAYLOAD_CMD_SZ] = '\0';
 
-            // Forward reply to BLE connected app & local serial
             ble_server_send_notify(reply_copy);
             console_print(reply_copy);
         }
@@ -183,12 +181,17 @@ static void process_incoming_packet(const espnow_rx_item_t *item) {
             s_cached_s1 = pkt->payload.status.s1;
             s_cached_s2 = pkt->payload.status.s2;
             s_cached_s3 = pkt->payload.status.s3;
+            s_cached_s4 = pkt->payload.status.s4;
             s_cached_o1 = pkt->payload.status.o1;
             s_cached_o2 = pkt->payload.status.o2;
             s_cached_o3 = pkt->payload.status.o3;
+            s_cached_o4 = pkt->payload.status.o4;
+            s_cached_smin = pkt->payload.status.smin;
+            s_cached_smax = pkt->payload.status.smax;
             s_cached_e1 = (pkt->payload.status.en_mask & 1) != 0;
             s_cached_e2 = (pkt->payload.status.en_mask & 2) != 0;
             s_cached_e3 = (pkt->payload.status.en_mask & 4) != 0;
+            s_cached_e4 = (pkt->payload.status.en_mask & 8) != 0;
             s_cached_idle = (pkt->payload.status.flags & 1) != 0;
             s_cached_run  = (pkt->payload.status.flags & 2) != 0;
             s_cached_loop = (pkt->payload.status.flags & 4) != 0;
@@ -196,12 +199,14 @@ static void process_incoming_packet(const espnow_rx_item_t *item) {
             s_has_cached_status = true;
             portEXIT_CRITICAL(&s_mux);
 
-            char status_line[160];
+            char status_line[192];
             snprintf(status_line, sizeof(status_line),
-                     "STATUS:s1=%d,s2=%d,s3=%d,o1=%d,o2=%d,o3=%d,en1=%d,en2=%d,en3=%d,idle=%d,run=%d,act=%d,loop=%d,bo=0,mpuc=%d,mpuok=1\n",
-                     s_cached_s1, s_cached_s2, s_cached_s3,
-                     s_cached_o1, s_cached_o2, s_cached_o3,
-                     s_cached_e1 ? 1 : 0, s_cached_e2 ? 1 : 0, s_cached_e3 ? 1 : 0,
+                     "STATUS:s1=%d,s2=%d,s3=%d,s4=%d,o1=%d,o2=%d,o3=%d,o4=%d,min=%d,max=%d,en1=%d,en2=%d,en3=%d,en4=%d,idle=%d,run=%d,act=%d,loop=%d,bo=0,mpuc=%d,mpuok=1\n",
+                     s_cached_s1, s_cached_s2, s_cached_s3, s_cached_s4,
+                     s_cached_o1, s_cached_o2, s_cached_o3, s_cached_o4,
+                     s_cached_smin, s_cached_smax,
+                     s_cached_e1 ? 1 : 0, s_cached_e2 ? 1 : 0,
+                     s_cached_e3 ? 1 : 0, s_cached_e4 ? 1 : 0,
                      s_cached_idle ? 1 : 0, s_cached_run ? 1 : 0,
                      s_cached_slot, s_cached_loop ? 1 : 0,
                      mpu_control_is_enabled() ? 1 : 0);
@@ -272,7 +277,6 @@ static void espnow_sync_task(void *pvParameters) {
         int64_t now_us = esp_timer_get_time();
 
         if (s_is_paired) {
-            // Check for stale link timeout (3.5 seconds)
             if (now_us - s_last_recv_us > 3500000) {
                 ESP_LOGW(TAG, "ESP-NOW link lost (peer silent). Re-entering auto-discovery.");
                 portENTER_CRITICAL(&s_mux);
@@ -282,25 +286,28 @@ static void espnow_sync_task(void *pvParameters) {
                 notify_link_state();
             } else {
                 if (s_local_role == ESPNOW_ROLE_RECEIVER) {
-                    // Transmit Arm status back to MPU Sender
-                    int s1 = 90, s2 = 90, s3 = 90;
-                    int o1 = 0,  o2 = 0,  o3 = 0;
-                    bool e1 = false, e2 = false, e3 = false;
-                    servo_get_all_angles(&s1, &s2, &s3);
-                    servo_get_all_offsets(&o1, &o2, &o3);
-                    servo_get_all_enabled(&e1, &e2, &e3);
+                    // Transmit Arm & Scissor status back to MPU Sender
+                    int s1 = 90, s2 = 90, s3 = 90, s4 = 90;
+                    int o1 = 0,  o2 = 0,  o3 = 0,  o4 = 0;
+                    int smin = 0, smax = 180;
+                    bool e1 = false, e2 = false, e3 = false, e4 = false;
 
-                    uint8_t en_mask = (e1 ? 1 : 0) | (e2 ? 2 : 0) | (e3 ? 4 : 0);
+                    servo_get_all_angles(&s1, &s2, &s3, &s4);
+                    servo_get_all_offsets(&o1, &o2, &o3, &o4);
+                    servo_get_all_enabled(&e1, &e2, &e3, &e4);
+                    servo_get_scissor_range(&smin, &smax);
+
+                    uint8_t en_mask = (e1 ? 1 : 0) | (e2 ? 2 : 0) | (e3 ? 4 : 0) | (e4 ? 8 : 0);
                     uint8_t flags = (servo_get_auto_idle() ? 1 : 0) |
                                     (servo_is_sequence_running() ? 2 : 0) |
                                     (servo_is_sequence_looping() ? 4 : 0);
                     uint8_t slot = (uint8_t)servo_get_active_slot();
 
-                    espnow_sync_send_status((uint8_t)s1, (uint8_t)s2, (uint8_t)s3,
-                                            (int8_t)o1, (int8_t)o2, (int8_t)o3,
+                    espnow_sync_send_status((uint8_t)s1, (uint8_t)s2, (uint8_t)s3, (uint8_t)s4,
+                                            (int8_t)o1, (int8_t)o2, (int8_t)o3, (int8_t)o4,
+                                            (uint8_t)smin, (uint8_t)smax,
                                             en_mask, flags, slot);
                 } else {
-                    // Send heartbeat keep-alive
                     espnow_packet_t hb = {};
                     hb.msg_type = ESPNOW_MSG_HEARTBEAT;
                     hb.payload.heartbeat.uptime_ms = (uint32_t)(now_us / 1000);
@@ -309,7 +316,6 @@ static void espnow_sync_task(void *pvParameters) {
             }
         }
 
-        // Broadcast discovery beacons when unpaired
         if (!s_is_paired) {
             espnow_packet_t disc = {};
             disc.msg_type = ESPNOW_MSG_DISCOVERY;
@@ -383,7 +389,7 @@ espnow_role_t espnow_sync_get_role(void) {
     return s_local_role;
 }
 
-bool espnow_sync_send_servos(uint8_t s1, uint8_t s2, uint8_t s3, uint16_t move_ms, bool mpu_active) {
+bool espnow_sync_send_servos(uint8_t s1, uint8_t s2, uint8_t s3, uint8_t s4, uint16_t move_ms, bool mpu_active) {
     if (!s_is_paired) return false;
 
     espnow_packet_t pkt = {};
@@ -391,6 +397,7 @@ bool espnow_sync_send_servos(uint8_t s1, uint8_t s2, uint8_t s3, uint16_t move_m
     pkt.payload.servo_set.s1 = s1;
     pkt.payload.servo_set.s2 = s2;
     pkt.payload.servo_set.s3 = s3;
+    pkt.payload.servo_set.s4 = s4;
     pkt.payload.servo_set.move_ms = move_ms;
     pkt.payload.servo_set.flags = mpu_active ? 1 : 0;
 
@@ -419,8 +426,9 @@ bool espnow_sync_send_reply(const char *reply_str) {
     return send_packet(s_peer_mac, &pkt);
 }
 
-bool espnow_sync_send_status(uint8_t s1, uint8_t s2, uint8_t s3,
-                             int8_t o1, int8_t o2, int8_t o3,
+bool espnow_sync_send_status(uint8_t s1, uint8_t s2, uint8_t s3, uint8_t s4,
+                             int8_t o1, int8_t o2, int8_t o3, int8_t o4,
+                             uint8_t smin, uint8_t smax,
                              uint8_t en_mask, uint8_t flags, uint8_t active_slot) {
     if (!s_is_paired) return false;
 
@@ -429,9 +437,13 @@ bool espnow_sync_send_status(uint8_t s1, uint8_t s2, uint8_t s3,
     pkt.payload.status.s1 = s1;
     pkt.payload.status.s2 = s2;
     pkt.payload.status.s3 = s3;
+    pkt.payload.status.s4 = s4;
     pkt.payload.status.o1 = o1;
     pkt.payload.status.o2 = o2;
     pkt.payload.status.o3 = o3;
+    pkt.payload.status.o4 = o4;
+    pkt.payload.status.smin = smin;
+    pkt.payload.status.smax = smax;
     pkt.payload.status.en_mask = en_mask;
     pkt.payload.status.flags = flags;
     pkt.payload.status.active_slot = active_slot;
@@ -439,9 +451,10 @@ bool espnow_sync_send_status(uint8_t s1, uint8_t s2, uint8_t s3,
     return send_packet(s_peer_mac, &pkt);
 }
 
-bool espnow_sync_get_cached_arm_status(int *s1, int *s2, int *s3,
-                                       int *o1, int *o2, int *o3,
-                                       bool *e1, bool *e2, bool *e3,
+bool espnow_sync_get_cached_arm_status(int *s1, int *s2, int *s3, int *s4,
+                                       int *o1, int *o2, int *o3, int *o4,
+                                       int *smin, int *smax,
+                                       bool *e1, bool *e2, bool *e3, bool *e4,
                                        bool *idle, bool *run, bool *loop, int *slot) {
     if (!s_has_cached_status) return false;
 
@@ -449,12 +462,17 @@ bool espnow_sync_get_cached_arm_status(int *s1, int *s2, int *s3,
     if (s1) *s1 = s_cached_s1;
     if (s2) *s2 = s_cached_s2;
     if (s3) *s3 = s_cached_s3;
+    if (s4) *s4 = s_cached_s4;
     if (o1) *o1 = s_cached_o1;
     if (o2) *o2 = s_cached_o2;
     if (o3) *o3 = s_cached_o3;
+    if (o4) *o4 = s_cached_o4;
+    if (smin) *smin = s_cached_smin;
+    if (smax) *smax = s_cached_smax;
     if (e1) *e1 = s_cached_e1;
     if (e2) *e2 = s_cached_e2;
     if (e3) *e3 = s_cached_e3;
+    if (e4) *e4 = s_cached_e4;
     if (idle) *idle = s_cached_idle;
     if (run)  *run  = s_cached_run;
     if (loop) *loop = s_cached_loop;

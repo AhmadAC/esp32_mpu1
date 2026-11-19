@@ -20,7 +20,7 @@ static const char *TAG = "MPU_CTRL";
 #define GAIN_MAX         4.0f
 #define GAIN_DEFAULT     2.0f
 
-// Pose index 0=roll, 1=pitch, 2=yaw  ->  servo index (0=S1 claw, 1=S2 arm, 2=S3 shoulder)
+// Pose index 0=roll, 1=pitch, 2=yaw -> servo index (0=S1 claw, 1=S2 arm, 2=S3 shoulder)
 static const int AXIS_SERVO[3] = { 1, 2, 0 };
 
 static portMUX_TYPE s_lock = portMUX_INITIALIZER_UNLOCKED;
@@ -139,8 +139,17 @@ static void control_task(void *pvParameters) {
             last_sent[2] = target_angles[2];
 
 #if NODE_IS_SENDER
-            // Stream wirelessly over ESP-NOW to the Arm board
-            espnow_sync_send_servos(target_angles[0], target_angles[1], target_angles[2], 0, true);
+            // Stream wirelessly over ESP-NOW to the Arm & Scissor board
+            int s1, s2, s3, s4, o1, o2, o3, o4, smin, smax;
+            bool e1, e2, e3, e4, idle, run, loop;
+            int slot;
+            uint8_t current_s4 = 90;
+            if (espnow_sync_get_cached_arm_status(&s1, &s2, &s3, &s4, &o1, &o2, &o3, &o4,
+                                                 &smin, &smax, &e1, &e2, &e3, &e4,
+                                                 &idle, &run, &loop, &slot)) {
+                current_s4 = (uint8_t)s4;
+            }
+            espnow_sync_send_servos(target_angles[0], target_angles[1], target_angles[2], current_s4, 0, true);
 #else
             servo_set_angle(0, target_angles[0]);
             servo_set_angle(1, target_angles[1]);

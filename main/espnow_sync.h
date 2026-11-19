@@ -14,7 +14,7 @@ extern "C" {
 
 typedef enum {
     ESPNOW_ROLE_SENDER   = 1, // MPU Node
-    ESPNOW_ROLE_RECEIVER = 2  // Arm Node
+    ESPNOW_ROLE_RECEIVER = 2  // Arm & Scissor Node
 } espnow_role_t;
 
 enum espnow_msg_type_t : uint8_t {
@@ -46,6 +46,7 @@ typedef struct {
             uint8_t  s1;
             uint8_t  s2;
             uint8_t  s3;
+            uint8_t  s4;
             uint16_t move_ms;
             uint8_t  flags; // bit 0: mpu_active
         } servo_set;
@@ -56,8 +57,9 @@ typedef struct {
             char reply[ESPNOW_PAYLOAD_CMD_SZ];
         } cmd_reply;
         struct {
-            uint8_t s1, s2, s3;
-            int8_t  o1, o2, o3;
+            uint8_t s1, s2, s3, s4;
+            int8_t  o1, o2, o3, o4;
+            uint8_t smin, smax;
             uint8_t en_mask;
             uint8_t flags;
             uint8_t active_slot;
@@ -77,8 +79,8 @@ void espnow_sync_get_peer_mac(uint8_t mac[6]);
 int8_t espnow_sync_get_last_rssi(void);
 espnow_role_t espnow_sync_get_role(void);
 
-// Transmit servo angles wirelessly
-bool espnow_sync_send_servos(uint8_t s1, uint8_t s2, uint8_t s3, uint16_t move_ms, bool mpu_active);
+// Transmit servo angles wirelessly (including scissor S4)
+bool espnow_sync_send_servos(uint8_t s1, uint8_t s2, uint8_t s3, uint8_t s4, uint16_t move_ms, bool mpu_active);
 
 // Transmit text command string from MPU to Arm
 bool espnow_sync_send_cmd(const char *cmd_str);
@@ -87,14 +89,16 @@ bool espnow_sync_send_cmd(const char *cmd_str);
 bool espnow_sync_send_reply(const char *reply_str);
 
 // Transmit telemetry status from Arm Receiver to MPU Sender
-bool espnow_sync_send_status(uint8_t s1, uint8_t s2, uint8_t s3,
-                             int8_t o1, int8_t o2, int8_t o3,
+bool espnow_sync_send_status(uint8_t s1, uint8_t s2, uint8_t s3, uint8_t s4,
+                             int8_t o1, int8_t o2, int8_t o3, int8_t o4,
+                             uint8_t smin, uint8_t smax,
                              uint8_t en_mask, uint8_t flags, uint8_t active_slot);
 
-// Retrieve cached arm status (on MPU Sender populated from Arm Receiver)
-bool espnow_sync_get_cached_arm_status(int *s1, int *s2, int *s3,
-                                       int *o1, int *o2, int *o3,
-                                       bool *e1, bool *e2, bool *e3,
+// Retrieve cached arm & scissor status (on MPU Sender populated from Arm Receiver)
+bool espnow_sync_get_cached_arm_status(int *s1, int *s2, int *s3, int *s4,
+                                       int *o1, int *o2, int *o3, int *o4,
+                                       int *smin, int *smax,
+                                       bool *e1, bool *e2, bool *e3, bool *e4,
                                        bool *idle, bool *run, bool *loop, int *slot);
 
 void espnow_sync_register_cmd_handler(espnow_cmd_handler_t handler);

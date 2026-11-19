@@ -9,20 +9,22 @@
 extern "C" {
 #endif
 
-// 3-Axis MP90S Robotic Arm Servo Mapping:
+// 4-Axis Robotic Arm & Scissor Lift Servo Mapping:
 // S1: Claw (Gripper) on GPIO 1
 // S2: Arm on GPIO 38
 // S3: Shoulder on GPIO 39
-#define SERVO_COUNT         3
+// S4: Scissor Lift MG996R on GPIO 12
+#define SERVO_COUNT         4
 #define SERVO_1_PIN         GPIO_NUM_1
 #define SERVO_2_PIN         GPIO_NUM_38
 #define SERVO_3_PIN         GPIO_NUM_39
+#define SERVO_4_PIN         GPIO_NUM_12
 
-// Standard 50Hz PWM timings (550us - 2450us for 0 - 180 degrees)
-#define SERVO_MIN_PULSE_US  550
-#define SERVO_MAX_PULSE_US  2450
-#define SERVO_MIN_US        550
-#define SERVO_MAX_US        2450
+// Standard 50Hz PWM timings (500us - 2500us for 0 - 180 degrees)
+#define SERVO_MIN_PULSE_US  500
+#define SERVO_MAX_PULSE_US  2500
+#define SERVO_MIN_US        500
+#define SERVO_MAX_US        2500
 #define SERVO_MIN_ANGLE     0
 #define SERVO_MAX_ANGLE     180
 #define SERVO_DEFAULT_ANGLE 90
@@ -38,6 +40,7 @@ typedef struct {
     int s1;
     int s2;
     int s3;
+    int s4;
     int move_ms;
     int wait_ms;
 } servo_step_t;
@@ -47,22 +50,29 @@ void servo_controller_init(void);
 // Angle commands
 void servo_set_angle(int idx, int angle);
 int  servo_get_angle(int idx);
-void servo_set_all(int s1, int s2, int s3);
-void servo_move_smooth(int s1, int s2, int s3, int duration_ms);
-void servo_get_all_angles(int *s1, int *s2, int *s3);
+void servo_set_all(int s1, int s2, int s3, int s4);
+void servo_move_smooth(int s1, int s2, int s3, int s4, int duration_ms);
+void servo_get_all_angles(int *s1, int *s2, int *s3, int *s4);
+
+// Scissor Lift specific range & proportional controls (Servo 4 / GPIO 12)
+void servo_set_scissor_percent(int pct);
+int  servo_get_scissor_percent(void);
+void servo_set_scissor_range(int min_angle, int max_angle);
+void servo_get_scissor_range(int *min_angle, int *max_angle);
 
 // Power / Attach / Detach controls (duty = 0 prevents heating and stall buzz)
 void servo_detach(int idx);
 void servo_detach_all(void);
+void servo_attach(int idx);
 void servo_attach_all(void);
-void servo_get_all_enabled(bool *e1, bool *e2, bool *e3);
+void servo_get_all_enabled(bool *e1, bool *e2, bool *e3, bool *e4);
 void servo_set_auto_idle(bool enabled);
 bool servo_get_auto_idle(void);
 
 // Calibration Trim Offsets
 void servo_set_offset(int idx, int offset);
-void servo_save_offsets(int o1, int o2, int o3);
-void servo_get_all_offsets(int *o1, int *o2, int *o3);
+void servo_save_offsets(int o1, int o2, int o3, int o4);
+void servo_get_all_offsets(int *o1, int *o2, int *o3, int *o4);
 
 // Programmable Sequence Routines
 bool servo_action_set(int slot, const char *def);
