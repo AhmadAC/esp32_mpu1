@@ -46,7 +46,7 @@ const DEFAULT_ACTIONS = {
 };
 
 let armActions = {};
-let actionTapMode = "run";
+let actionTapMode = "run"; // "run" | "loop" | "edit"
 let editingSlot = 1;
 let editorSteps = [];
 let activeRunningSlot = 0;
@@ -59,7 +59,7 @@ function cloneDefaultActions() {
 
 function initActionsStorage() {
   try {
-    const stored = localStorage.getItem("arm_scissor_actions_v1");
+    const stored = localStorage.getItem("arm_scissor_actions_v2");
     armActions = stored ? JSON.parse(stored) : cloneDefaultActions();
   } catch (e) {
     armActions = cloneDefaultActions();
@@ -69,7 +69,7 @@ function initActionsStorage() {
 
 function persistActionsLocal() {
   try {
-    localStorage.setItem("arm_scissor_actions_v1", JSON.stringify(armActions));
+    localStorage.setItem("arm_scissor_actions_v2", JSON.stringify(armActions));
   } catch (e) {}
 }
 
@@ -235,12 +235,12 @@ function renderEditorSteps() {
         <span style="font-size:10px; font-weight:700; color:#38bdf8;">Step ${idx + 1}</span>
         <div style="display:flex; gap:6px;">
           <button type="button" onclick="previewStep(${idx})" style="background:#0284c7; color:white; border:none; border-radius:4px; padding:2px 7px; font-size:9.5px; font-weight:700; cursor:pointer;">Preview</button>
-          <button type="button" onclick="moveStep(${idx}, -1)" style="background:#334155; color:white; border:none; border-radius:4px; padding:2px 6px; font-size:9.5px; cursor:pointer; display:inline-flex; align-items:center;"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"></line><polyline points="5 12 12 5 19 12"></polyline></svg></button>
-          <button type="button" onclick="moveStep(${idx}, 1)" style="background:#334155; color:white; border:none; border-radius:4px; padding:2px 6px; font-size:9.5px; cursor:pointer; display:inline-flex; align-items:center;"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><polyline points="19 12 12 19 5 12"></polyline></svg></button>
-          <button type="button" onclick="deleteStep(${idx})" style="background:#ef4444; color:white; border:none; border-radius:4px; padding:2px 6px; font-size:9.5px; font-weight:700; cursor:pointer; display:inline-flex; align-items:center;"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
+          <button type="button" onclick="moveStep(${idx}, -1)" style="background:#334155; color:white; border:none; border-radius:4px; padding:3px 6px; font-size:9.5px; cursor:pointer; display:inline-flex; align-items:center;"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"></line><polyline points="5 12 12 5 19 12"></polyline></svg></button>
+          <button type="button" onclick="moveStep(${idx}, 1)" style="background:#334155; color:white; border:none; border-radius:4px; padding:3px 6px; font-size:9.5px; cursor:pointer; display:inline-flex; align-items:center;"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><polyline points="19 12 12 19 5 12"></polyline></svg></button>
+          <button type="button" onclick="deleteStep(${idx})" style="background:#ef4444; color:white; border:none; border-radius:4px; padding:3px 6px; font-size:9.5px; font-weight:700; cursor:pointer; display:inline-flex; align-items:center;"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
         </div>
       </div>
-      <div class="step-inputs" style="grid-template-columns: repeat(6, 1fr);">
+      <div class="step-inputs">
         <div class="step-field">
           <label>S1 Claw</label>
           <input type="number" min="0" max="180" value="${st.s1}" onchange="updateStepField(${idx}, 's1', this.value)">

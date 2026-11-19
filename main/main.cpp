@@ -37,7 +37,12 @@ extern "C" void app_main(void) {
 
 #if NODE_IS_RECEIVER
     // Clamp physical servo signal pins LOW immediately: Claw(GP1), Arm(GP38), Shoulder(GP39), Scissor(GP12)
-    const gpio_num_t servo_pins[SERVO_COUNT] = { SERVO_1_PIN, SERVO_2_PIN, SERVO_3_PIN, SERVO_4_PIN };
+    const gpio_num_t servo_pins[SERVO_COUNT] = {
+        SERVO_1_PIN_DEFAULT,
+        SERVO_2_PIN_DEFAULT,
+        SERVO_3_PIN_DEFAULT,
+        SERVO_4_PIN_DEFAULT
+    };
     for (int i = 0; i < SERVO_COUNT; i++) {
         gpio_reset_pin(servo_pins[i]);
         gpio_set_direction(servo_pins[i], GPIO_MODE_OUTPUT);

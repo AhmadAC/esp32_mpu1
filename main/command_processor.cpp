@@ -35,6 +35,7 @@ static bool parse_bool_arg(const char *s) {
     return (strcasecmp(s, "on") == 0 || strcmp(s, "1") == 0 || strcasecmp(s, "true") == 0);
 }
 
+#if NODE_IS_SENDER
 static bool is_manual_motion_cmd(const char *cmd) {
     if (!cmd) return false;
     if ((cmd[0] == 's' || cmd[0] == 'S') && (cmd[1] >= '1' && cmd[1] <= '4')) return true;
@@ -55,7 +56,6 @@ static bool is_manual_motion_cmd(const char *cmd) {
     return false;
 }
 
-#if NODE_IS_SENDER
 static void release_mpu_control(command_print_fn_t print_fn) {
     if (mpu_control_is_enabled()) {
         mpu_control_set_enabled(false);
@@ -65,7 +65,7 @@ static void release_mpu_control(command_print_fn_t print_fn) {
 #endif
 
 void command_processor_init(void) {
-    ESP_LOGI(TAG, "Command Processor Initialized for [%s]", NODE_ROLE_NAME);
+    ESP_LOGI(TAG, "Command Processor Initialized for [%s] (4-Axis Arm & Scissor Lift on GP12)", NODE_ROLE_NAME);
 }
 
 size_t command_build_status(char *buf, size_t len) {
@@ -152,16 +152,21 @@ void command_process(const char *cmd_line, command_print_fn_t print_fn) {
     }
 
     if (strcmp(p, "help") == 0 || strcmp(p, "?") == 0) {
-        print_fn("YD-ESP32-S3 Arm & Scissor Controller (ESP-NOW):\n"
-                 "  espnow                               : Print ESP-NOW pairing state\n"
+        print_fn("YD-ESP32-S3 4-Axis Arm & Scissor Lift Controller (ESP-NOW):\n"
+                 "  espnow                               : Print ESP-NOW pairing and RSSI state\n"
                  "  mpu <on|off>                         : BLE telemetry stream\n"
-                 "  mpu_ctrl <on|off>                    : MPU Motion Control\n"
-                 "  s1..s4 <0-180>                       : Direct servo angles\n"
-                 "  claw <0-180|open|close>              : Claw gripper (S1)\n"
-                 "  arm <0-180> / shoulder <0-180>       : Joint angles (S2, S3)\n"
-                 "  scissor <0-180> / lift <0-100>       : Scissor lift angle/percent (S4)\n"
-                 "  pins <p1> <p2> <p3> <p4>             : Remap servo GPIO pins\n"
+                 "  mpu_read / mpu_get                   : IMU raw telemetry / state\n"
+                 "  mpu_cal <gyro|accel|neutral|yaw|clear>: Calibrate MPU\n"
+                 "  mpu_ctrl <on|off>                    : Wireless MPU-to-Arm control\n"
+                 "  claw <0-180|open|close>              : Claw gripper (S1, GP1)\n"
+                 "  arm <0-180> / shoulder <0-180>       : Joint angles (S2 GP38, S3 GP39)\n"
+                 "  scissor <0-180> / s4 <0-180>         : Scissor lift angle (S4, GP12)\n"
+                 "  lift <0-100>                         : Scissor lift percentage\n"
+                 "  pins <p1> <p2> <p3> <p4>             : Hardware GPIO Pin Remapping\n"
+                 "  range_set <min> <max> / range_get    : Scissor lift end-stop trim\n"
+                 "  s1..s4 <deg>                         : Move individual servo\n"
                  "  home / min / max / mid / stop        : Quick presets\n"
+                 "  detach / attach                      : Power management\n"
                  "  status                               : Full system telemetry\n");
         return;
     }
@@ -371,7 +376,7 @@ void command_process(const char *cmd_line, command_print_fn_t print_fn) {
         servo_set_scissor_percent(pct);
         char msg[64];
         snprintf(msg, sizeof(msg), "ANG:%d,%d,%d,%d\n", servo_get_angle(0), servo_get_angle(1), servo_get_angle(2), servo_get_angle(3));
-        print_fn(msg);
+            print_fn(msg);
         return;
     }
 
