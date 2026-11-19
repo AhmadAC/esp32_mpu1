@@ -28,7 +28,7 @@ jobs:
           # 2. Fix git safe directory warning inside container
           git config --global --add safe.directory "*"
 
-          # 3. Create isolated output directories for sender and receiver
+          # 3. Create isolated output directories
           mkdir -p build_out/receiver
           mkdir -p build_out/sender
 
@@ -36,14 +36,43 @@ jobs:
           echo "Building YD-ESP32-S3: 1. Arm Receiver (Servos) Firmware"
           echo "=========================================================="
 
-          idf.py set-target esp32s3
-          idf.py -B build_receiver -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.receiver" build
+          # Clean any stale root configuration
+          rm -f sdkconfig sdkconfig.old
+          export APP_NAME="esp32s3_arm_receiver"
+
+          idf.py -B build_receiver \
+                 -DAPP_NAME=esp32s3_arm_receiver \
+                 -DSDKCONFIG="${PWD}/build_receiver/sdkconfig" \
+                 -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.receiver" \
+                 set-target esp32s3
+
+          idf.py -B build_receiver \
+                 -DAPP_NAME=esp32s3_arm_receiver \
+                 -DSDKCONFIG="${PWD}/build_receiver/sdkconfig" \
+                 -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.receiver" \
+                 build
 
           echo "=========================================================="
           echo "Building YD-ESP32-S3: 2. MPU Sender (IMU) Firmware"
           echo "=========================================================="
 
-          idf.py -B build_sender -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.sender" build
+          # Clean root configuration before building sender
+          rm -f sdkconfig sdkconfig.old
+          export APP_NAME="esp32s3_mpu_sender"
+
+          idf.py -B build_sender \
+                 -DAPP_NAME=esp32s3_mpu_sender \
+                 -DSDKCONFIG="${PWD}/build_sender/sdkconfig" \
+                 -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.sender" \
+                 set-target esp32s3
+
+          idf.py -B build_sender \
+                 -DAPP_NAME=esp32s3_mpu_sender \
+                 -DSDKCONFIG="${PWD}/build_sender/sdkconfig" \
+                 -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.sender" \
+                 build
+
+          rm -f sdkconfig sdkconfig.old
 
           echo "=========================================================="
           echo "Organizing Receiver Firmware Package"
@@ -51,7 +80,12 @@ jobs:
 
           cp "build_receiver/bootloader/bootloader.bin" "build_out/receiver/bootloader.bin"
           cp "build_receiver/partition_table/partition-table.bin" "build_out/receiver/partitions.bin"
-          cp "build_receiver/esp32s3_arm_receiver.bin" "build_out/receiver/esp32s3_arm_receiver.bin"
+
+          if [ -f "build_receiver/esp32s3_arm_receiver.bin" ]; then
+              cp "build_receiver/esp32s3_arm_receiver.bin" "build_out/receiver/esp32s3_arm_receiver.bin"
+          else
+              cp "$(find build_receiver -maxdepth 1 -name "*.bin" ! -name "bootloader.bin" ! -name "partition*.bin" | head -n 1)" "build_out/receiver/esp32s3_arm_receiver.bin"
+          fi
 
           cat <<EOF > build_out/receiver/manifest.json
           {
@@ -76,7 +110,12 @@ jobs:
 
           cp "build_sender/bootloader/bootloader.bin" "build_out/sender/bootloader.bin"
           cp "build_sender/partition_table/partition-table.bin" "build_out/sender/partitions.bin"
-          cp "build_sender/esp32s3_mpu_sender.bin" "build_out/sender/esp32s3_mpu_sender.bin"
+
+          if [ -f "build_sender/esp32s3_mpu_sender.bin" ]; then
+              cp "build_sender/esp32s3_mpu_sender.bin" "build_out/sender/esp32s3_mpu_sender.bin"
+          else
+              cp "$(find build_sender -maxdepth 1 -name "*.bin" ! -name "bootloader.bin" ! -name "partition*.bin" | head -n 1)" "build_out/sender/esp32s3_mpu_sender.bin"
+          fi
 
           cat <<EOF > build_out/sender/manifest.json
           {
@@ -95,19 +134,19 @@ jobs:
           }
           EOF
 
-          echo "Receiver build contents:"
+          echo "Receiver directory:"
           ls -la build_out/receiver/
 
-          echo "Sender build contents:"
+          echo "Sender directory:"
           ls -la build_out/sender/
 
-      - name: Upload Arm Receiver Artifact
+      - name: Upload Arm Receiver Binaries
         uses: actions/upload-artifact@v4
         with:
           name: yd_esp32_s3_arm_receiver
           path: build_out/receiver/
 
-      - name: Upload MPU Sender Artifact
+      - name: Upload MPU Sender Binaries
         uses: actions/upload-artifact@v4
         with:
           name: yd_esp32_s3_mpu_sender

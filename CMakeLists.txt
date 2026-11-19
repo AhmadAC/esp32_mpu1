@@ -1,9 +1,12 @@
 cmake_minimum_required(VERSION 3.16)
 
-include($ENV{IDF_PATH}/tools/cmake/project.cmake)
-
-if(CONFIG_NODE_ROLE_SENDER)
-    project(esp32s3_mpu_sender)
+if(DEFINED APP_NAME)
+    set(PROJ_NAME ${APP_NAME})
+elseif(DEFINED ENV{APP_NAME})
+    set(PROJ_NAME $ENV{APP_NAME})
 else()
-    project(esp32s3_arm_receiver)
+    set(PROJ_NAME "esp32s3_arm_receiver")
 endif()
+
+include($ENV{IDF_PATH}/tools/cmake/project.cmake)
+project(${PROJ_NAME})

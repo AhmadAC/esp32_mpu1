@@ -34,12 +34,14 @@ static bool parse_bool_arg(const char *s) {
     return (strcasecmp(s, "on") == 0 || strcmp(s, "1") == 0 || strcasecmp(s, "true") == 0);
 }
 
+#if NODE_IS_SENDER
 static void release_mpu_control(command_print_fn_t print_fn) {
     if (mpu_control_is_enabled()) {
         mpu_control_set_enabled(false);
         mpu_control_report(print_fn);
     }
 }
+#endif
 
 void command_processor_init(void) {
     ESP_LOGI(TAG, "Command Processor Initialized for [%s]", NODE_ROLE_NAME);
@@ -194,20 +196,20 @@ void command_process(const char *cmd_line, command_print_fn_t print_fn) {
     }
 
 #if NODE_IS_SENDER
-    // On the MPU Sender, forward any motion or servo commands over ESP-NOW to the Arm Receiver
+    // On MPU Sender: forward movement, joints, and action commands over ESP-NOW to Arm
     release_mpu_control(print_fn);
     if (espnow_sync_is_paired()) {
         espnow_sync_send_cmd(p);
-        print_fn(">> [ESP-NOW Forwarded to Arm] ");
+        print_fn(">> [ESP-NOW Forwarded] ");
         print_fn(p);
         print_fn("\n");
         return;
     } else {
-        print_fn(">> [ESP-NOW Warning] Arm Receiver not paired yet. Waiting for link...\n");
+        print_fn(">> [ESP-NOW Warning] Arm Receiver not paired yet. Scanning...\n");
         return;
     }
 #else
-    // ---------------- Receiver: Local Servo Execution ----------------
+    // ---------------- Receiver: Local Joint & Servo Execution ----------------
     if (strncmp(p, "claw ", 5) == 0) {
         const char *arg = p + 5;
         int angle = -1;

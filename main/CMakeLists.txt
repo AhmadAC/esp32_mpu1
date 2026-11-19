@@ -12,3 +12,9 @@ idf_component_register(
     INCLUDE_DIRS "."
     REQUIRES nvs_flash driver esp_timer bt esp_wifi esp_event esp_netif
 )
+
+if(PROJECT_NAME STREQUAL "esp32s3_mpu_sender")
+    target_compile_definitions(${COMPONENT_LIB} PUBLIC CONFIG_NODE_ROLE_SENDER=1)
+else()
+    target_compile_definitions(${COMPONENT_LIB} PUBLIC CONFIG_NODE_ROLE_RECEIVER=1)
+endif()
