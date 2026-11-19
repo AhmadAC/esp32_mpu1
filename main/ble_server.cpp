@@ -68,7 +68,7 @@ static void dispatch_completed_line_locked_copy(void) {
         msg[copy_len] = '\0';
         s_rx_line_len = 0;
     }
-    portEXIT_CRITICAL(&s_mux);
+    portEXIT_CRITICAL(&s_rx_mux);
 
     if (copy_len > 0 && s_cmd_queue != NULL) {
         xQueueSend(s_cmd_queue, msg, 0);
