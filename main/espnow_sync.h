@@ -10,7 +10,7 @@ extern "C" {
 
 #define ESPNOW_CHANNEL        1
 #define ESPNOW_MAGIC          0x59444152 // "YDAR"
-#define ESPNOW_PAYLOAD_CMD_SZ 96
+#define ESPNOW_PAYLOAD_CMD_SZ 216
 
 typedef enum {
     ESPNOW_ROLE_SENDER   = 1, // MPU Node
@@ -25,7 +25,8 @@ enum espnow_msg_type_t : uint8_t {
     ESPNOW_MSG_SERVO_SET  = 0x10,
     ESPNOW_MSG_CMD_STR    = 0x11,
     ESPNOW_MSG_CMD_REPLY  = 0x12,
-    ESPNOW_MSG_STATUS     = 0x20
+    ESPNOW_MSG_STATUS     = 0x20,
+    ESPNOW_MSG_IMU_LINE   = 0x21
 };
 
 #pragma pack(push, 1)
@@ -65,6 +66,9 @@ typedef struct {
             uint8_t active_slot;
         } status;
         struct {
+            char line[ESPNOW_PAYLOAD_CMD_SZ];
+        } imu_line;
+        struct {
             uint32_t uptime_ms;
         } heartbeat;
     } payload;
@@ -82,10 +86,10 @@ espnow_role_t espnow_sync_get_role(void);
 // Transmit servo angles wirelessly (including scissor S4)
 bool espnow_sync_send_servos(uint8_t s1, uint8_t s2, uint8_t s3, uint8_t s4, uint16_t move_ms, bool mpu_active);
 
-// Transmit text command string from MPU to Arm
+// Transmit text command string between MPU and Arm
 bool espnow_sync_send_cmd(const char *cmd_str);
 
-// Transmit command execution reply back from Arm to MPU
+// Transmit command execution reply back between nodes
 bool espnow_sync_send_reply(const char *reply_str);
 
 // Transmit telemetry status from Arm Receiver to MPU Sender
@@ -94,7 +98,10 @@ bool espnow_sync_send_status(uint8_t s1, uint8_t s2, uint8_t s3, uint8_t s4,
                              uint8_t smin, uint8_t smax,
                              uint8_t en_mask, uint8_t flags, uint8_t active_slot);
 
-// Retrieve cached arm & scissor status (on MPU Sender populated from Arm Receiver)
+// Transmit raw IMU line from MPU Sender to Arm Receiver
+bool espnow_sync_send_imu_line(const char *imu_str);
+
+// Retrieve cached arm & scissor status
 bool espnow_sync_get_cached_arm_status(int *s1, int *s2, int *s3, int *s4,
                                        int *o1, int *o2, int *o3, int *o4,
                                        int *smin, int *smax,

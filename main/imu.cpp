@@ -1,6 +1,7 @@
 #include "imu.h"
 #include "mpu6050.h"
 #include "ble_server.h"
+#include "espnow_sync.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "nvs.h"
@@ -13,18 +14,16 @@
 static const char *TAG = "IMU";
 
 #define LOOP_MS               5        // 200 Hz sampling & fusion
-#define TELEMETRY_DIV         10       // 20 Hz BLE telemetry
+#define TELEMETRY_DIV         10       // 20 Hz telemetry
 #define CAL_SAMPLES           400      // 2 s sampling window
 #define STALE_US              150000
 #define RAD2DEG               57.29577951f
 #define DEG2RAD               0.01745329252f
 
-// Stillness detection thresholds for resting on table
-#define STILL_GYRO_DPS        0.65f    // below this rate, sensor is still
-#define STILL_ACCEL_TOL_G     0.07f    // magnitude deviation allowed
-#define STILL_CONFIRM_TICKS   40       // ~200ms of quiet before locking still
+#define STILL_GYRO_DPS        0.65f
+#define STILL_ACCEL_TOL_G     0.07f
+#define STILL_CONFIRM_TICKS   40
 
-// Calibration noise tolerance (relaxed to tolerate table vibration)
 #define CAL_GYRO_RANGE_LSB    600
 #define CAL_ACCEL_RANGE_LSB   1200
 #define MAX_READ_FAILS        50
@@ -119,29 +118,36 @@ static void format_cal_line(char *buf, size_t len, const imu_cal_t *c) {
              c->accel_bias[0], c->accel_bias[1], c->accel_bias[2]);
 }
 
+static void broadcast_notify(const char *buf) {
+    ble_server_send_notify(buf);
+    if (espnow_sync_is_paired()) {
+        espnow_sync_send_reply(buf);
+    }
+}
+
 static void notify_cal_state(const imu_cal_t *c) {
     char buf[240];
     format_cal_line(buf, sizeof(buf), c);
-    ble_server_send_notify(buf);
+    broadcast_notify(buf);
 }
 
 static void notify_hw(bool ok) {
     char buf[48];
     snprintf(buf, sizeof(buf), "MPUHW:ok=%d,addr=%d\n", ok ? 1 : 0, (int)mpu6050_address());
-    ble_server_send_notify(buf);
+    broadcast_notify(buf);
 }
 
 static void notify_result(const char *kind, bool ok, const char *msg) {
     char buf[160];
     snprintf(buf, sizeof(buf), "MPUCALRES:kind=%s,ok=%d,msg=%s\n", kind, ok ? 1 : 0, msg);
-    ble_server_send_notify(buf);
+    broadcast_notify(buf);
     ESP_LOGI(TAG, "Calibration %s: %s (%s)", kind, ok ? "OK" : "FAILED", msg);
 }
 
 static void notify_progress(const char *kind, int pct) {
     char buf[64];
     snprintf(buf, sizeof(buf), "MPUCALPROG:kind=%s,pct=%d\n", kind, pct);
-    ble_server_send_notify(buf);
+    broadcast_notify(buf);
 }
 
 static void publish_pose(const imu_pose_t *p, int64_t now_us) {
@@ -171,7 +177,6 @@ bool imu_format_line(char *buf, size_t len) {
 static void imu_task(void *pvParameters) {
     (void)pvParameters;
 
-    // Allow NimBLE RF calibration and sensor power rail to settle before starting I2C traffic
     vTaskDelay(pdMS_TO_TICKS(150));
 
     s_sensor_ok = mpu6050_init();
@@ -209,7 +214,6 @@ static void imu_task(void *pvParameters) {
         vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(LOOP_MS));
         int64_t now_us = esp_timer_get_time();
 
-        // Check sensor presence / re-probe if disconnected
         if (!s_sensor_ok) {
             if (now_us - last_probe_us > 1000000) {
                 last_probe_us = now_us;
@@ -226,7 +230,6 @@ static void imu_task(void *pvParameters) {
             continue;
         }
 
-        // Handle calibration requests
         int req = s_cal_req;
         if (req != REQ_NONE && collecting == REQ_NONE) {
             s_cal_req = REQ_NONE;
@@ -266,7 +269,6 @@ static void imu_task(void *pvParameters) {
             }
         }
 
-        // Read raw data from MPU-6050
         mpu6050_raw_t raw;
         if (!mpu6050_read_raw(&raw)) {
             if (++read_fails >= MAX_READ_FAILS) {
@@ -280,7 +282,6 @@ static void imu_task(void *pvParameters) {
         }
         read_fails = 0;
 
-        // Process calibration sampling
         if (collecting != REQ_NONE) {
             const int16_t v[6] = { raw.ax, raw.ay, raw.az, raw.gx, raw.gy, raw.gz };
             for (int i = 0; i < 6; i++) {
@@ -331,9 +332,8 @@ static void imu_task(void *pvParameters) {
                     } else if (total_mag < 0.70f || total_mag > 1.30f) {
                         notify_result(kind, false, "Invalid acceleration. Keep sensor resting still");
                     } else {
-                        // Multi-axis stationary calibration: auto-detects dominant gravity axis
                         float max_comp = fabsf(mean_ax);
-                        int axis = 0; // 0=X, 1=Y, 2=Z
+                        int axis = 0;
                         if (fabsf(mean_ay) > max_comp) { max_comp = fabsf(mean_ay); axis = 1; }
                         if (fabsf(mean_az) > max_comp) { max_comp = fabsf(mean_az); axis = 2; }
 
@@ -359,7 +359,6 @@ static void imu_task(void *pvParameters) {
             continue;
         }
 
-        // Convert raw values and subtract calibrated offsets
         float ax = (float)raw.ax / MPU6050_ACCEL_LSB_PER_G - cal.accel_bias[0];
         float ay = (float)raw.ay / MPU6050_ACCEL_LSB_PER_G - cal.accel_bias[1];
         float az = (float)raw.az / MPU6050_ACCEL_LSB_PER_G - cal.accel_bias[2];
@@ -373,7 +372,6 @@ static void imu_task(void *pvParameters) {
         if (dt < 0.001f) dt = 0.001f;
         if (dt > 0.05f) dt = 0.05f;
 
-        // Detect if sensor is resting stationary on the desk
         float a_mag = sqrtf(ax * ax + ay * ay + az * az);
         float g_mag = sqrtf(gx * gx + gy * gy + gz * gz);
         bool instant_still = (g_mag < STILL_GYRO_DPS) && (fabsf(a_mag - 1.0f) < STILL_ACCEL_TOL_G);
@@ -386,17 +384,12 @@ static void imu_task(void *pvParameters) {
             s_is_still = false;
         }
 
-        // When stationary, clamp gyro rates to zero and softly adapt zero-bias
         if (s_is_still) {
             gx = 0.0f;
             gy = 0.0f;
             gz = 0.0f;
         }
 
-        // Upright coordinate frame (standing on pins: +X up, +Y right, +Z outward):
-        //   Roll: lean left/right  (measured by ay vs ax, gyro gz)
-        //   Pitch: tilt forward/back (measured by az vs ax, gyro gy)
-        //   Yaw: twist on desk    (integrated from gyro gx)
         float acc_roll  = atan2f(ay, ax) * RAD2DEG;
         float acc_pitch = atan2f(-az, sqrtf(ax * ax + ay * ay)) * RAD2DEG;
 
@@ -407,12 +400,9 @@ static void imu_task(void *pvParameters) {
             initialized = true;
         } else {
             if (s_is_still) {
-                // When still on desk, gently relax toward accelerometer gravity angle (no jitter)
                 roll  += 0.02f * wrap180(acc_roll - roll);
                 pitch += 0.02f * wrap180(acc_pitch - pitch);
-                // Zero-yaw drift clamp: do not integrate gyro while still
             } else {
-                // Moving: integrate gyro rates with complementary accelerometer correction
                 roll  += gz * dt;
                 pitch += gy * dt;
                 yaw   += gx * dt;
@@ -427,12 +417,10 @@ static void imu_task(void *pvParameters) {
             yaw = wrap180(yaw);
         }
 
-        // Output pose relative to stored neutral pose
         float out_r = wrap180(roll - cal.neutral_angles[0]);
         float out_p = wrap180(pitch - cal.neutral_angles[1]);
         float out_y = wrap180(yaw - cal.neutral_angles[2]);
 
-        // Snap near-zero values to 0.0 when resting still on table
         if (s_is_still) {
             if (fabsf(out_r) < 0.25f) out_r = 0.0f;
             if (fabsf(out_p) < 0.25f) out_p = 0.0f;
@@ -448,13 +436,17 @@ static void imu_task(void *pvParameters) {
         out.temp = temp_c;
         publish_pose(&out, now_us);
 
-        // Send 20 Hz BLE telemetry
         if (++tele_div >= TELEMETRY_DIV) {
             tele_div = 0;
-            if (s_stream && ble_server_is_connected()) {
+            if (s_stream) {
                 char line[128];
                 if (imu_format_line(line, sizeof(line))) {
-                    ble_server_send_notify(line);
+                    if (ble_server_is_connected()) {
+                        ble_server_send_notify(line);
+                    }
+                    if (espnow_sync_is_paired()) {
+                        espnow_sync_send_imu_line(line);
+                    }
                 }
             }
         }

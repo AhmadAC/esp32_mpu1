@@ -35,20 +35,17 @@ static bool parse_bool_arg(const char *s) {
     return (strcasecmp(s, "on") == 0 || strcmp(s, "1") == 0 || strcasecmp(s, "true") == 0);
 }
 
-#if NODE_IS_SENDER
-static bool is_manual_motion_cmd(const char *cmd) {
+// Releases MPU tracking ONLY when manual arm commands (S1, S2, S3) are received.
+// Manual scissor movement (S4 / lift) does NOT stop MPU arm tracking.
+static bool is_arm_motion_override(const char *cmd) {
     if (!cmd) return false;
-    if ((cmd[0] == 's' || cmd[0] == 'S') && (cmd[1] >= '1' && cmd[1] <= '4')) return true;
+    if ((cmd[0] == 's' || cmd[0] == 'S') && (cmd[1] >= '1' && cmd[1] <= '3')) return true;
     if (strncmp(cmd, "move", 4) == 0) return true;
     if (strncmp(cmd, "set", 3) == 0) return true;
     if (strncmp(cmd, "claw", 4) == 0) return true;
     if (strncmp(cmd, "arm", 3) == 0 && (cmd[3] == ' ' || cmd[3] == '\0')) return true;
     if (strncmp(cmd, "shoulder", 8) == 0) return true;
-    if (strncmp(cmd, "scissor", 7) == 0) return true;
-    if (strncmp(cmd, "lift", 4) == 0) return true;
-    if (strncmp(cmd, "nudge", 5) == 0) return true;
     if (strcmp(cmd, "home") == 0 || strcmp(cmd, "center") == 0) return true;
-    if (strcmp(cmd, "min") == 0 || strcmp(cmd, "max") == 0 || strcmp(cmd, "mid") == 0) return true;
     if (strcmp(cmd, "stop") == 0) return true;
     if (strncmp(cmd, "action_run", 10) == 0 || strncmp(cmd, "run ", 4) == 0) return true;
     if (strncmp(cmd, "action_loop", 11) == 0 || strncmp(cmd, "loop ", 5) == 0) return true;
@@ -62,10 +59,9 @@ static void release_mpu_control(command_print_fn_t print_fn) {
         mpu_control_report(print_fn);
     }
 }
-#endif
 
 void command_processor_init(void) {
-    ESP_LOGI(TAG, "Command Processor Initialized for [%s] (4-Axis Arm & Scissor Lift on GP12)", NODE_ROLE_NAME);
+    ESP_LOGI(TAG, "Command Processor Initialized for [%s] (4-Axis Arm & Scissor Lift)", NODE_ROLE_NAME);
 }
 
 size_t command_build_status(char *buf, size_t len) {
@@ -152,22 +148,21 @@ void command_process(const char *cmd_line, command_print_fn_t print_fn) {
     }
 
     if (strcmp(p, "help") == 0 || strcmp(p, "?") == 0) {
-        print_fn("YD-ESP32-S3 4-Axis Arm & Scissor Lift Controller (ESP-NOW):\n"
-                 "  espnow                               : Print ESP-NOW pairing and RSSI state\n"
-                 "  mpu <on|off>                         : BLE telemetry stream\n"
-                 "  mpu_read / mpu_get                   : IMU raw telemetry / state\n"
+        print_fn("YD-ESP32-S3 Dual-Node Arm & Scissor Lift Controller:\n"
+                 "  espnow                               : Print wireless link status\n"
+                 "  mpu <on|off>                         : Toggle 20 Hz IMU telemetry stream\n"
+                 "  mpu_read / mpu_get                   : Telemetry / state readout\n"
                  "  mpu_cal <gyro|accel|neutral|yaw|clear>: Calibrate MPU\n"
-                 "  mpu_ctrl <on|off>                    : Wireless MPU-to-Arm control\n"
-                 "  claw <0-180|open|close>              : Claw gripper (S1, GP1)\n"
-                 "  arm <0-180> / shoulder <0-180>       : Joint angles (S2 GP38, S3 GP39)\n"
-                 "  scissor <0-180> / s4 <0-180>         : Scissor lift angle (S4, GP12)\n"
-                 "  lift <0-100>                         : Scissor lift percentage\n"
-                 "  pins <p1> <p2> <p3> <p4>             : Hardware GPIO Pin Remapping\n"
+                 "  mpu_ctrl <on|off>                    : Wireless MPU-to-Arm tracking\n"
+                 "  claw <0-180|open|close>              : Claw gripper (S1)\n"
+                 "  arm <0-180> / shoulder <0-180>       : Joint angles (S2, S3)\n"
+                 "  scissor <0-180> / s4 <0-180>         : Scissor lift angle (S4)\n"
+                 "  lift <0-100>                         : Proportional lift height percentage\n"
+                 "  pins <p1> <p2> <p3> <p4>             : Hardware GPIO mapping\n"
                  "  range_set <min> <max> / range_get    : Scissor lift end-stop trim\n"
-                 "  s1..s4 <deg>                         : Move individual servo\n"
-                 "  home / min / max / mid / stop        : Quick presets\n"
-                 "  detach / attach                      : Power management\n"
-                 "  status                               : Full system telemetry\n");
+                 "  home / min / max / mid / stop        : Presets and motion stop\n"
+                 "  detach / attach                      : Motor torque management\n"
+                 "  status                               : Full state dump\n");
         return;
     }
 
@@ -178,141 +173,107 @@ void command_process(const char *cmd_line, command_print_fn_t print_fn) {
         return;
     }
 
-    // Dynamic Hardware Pin Mapping: "pins <p1> <p2> <p3> <p4>" or "pins"
-    if (strncmp(p, "pins ", 5) == 0) {
-        int p1 = -1, p2 = -1, p3 = -1, p4 = -1;
-        if (sscanf(p + 5, "%d %d %d %d", &p1, &p2, &p3, &p4) == 4) {
-#if NODE_IS_RECEIVER
-            servo_set_pins(p1, p2, p3, p4);
-            char resp[64];
-            snprintf(resp, sizeof(resp), "PINS:%d,%d,%d,%d\n", p1, p2, p3, p4);
-            print_fn(resp);
-#elif NODE_IS_SENDER
-            if (espnow_sync_is_paired()) {
-                espnow_sync_send_cmd(p);
-            }
-#endif
-            return;
-        }
-    }
-
-    if (strcmp(p, "pins") == 0) {
-        int p1 = 1, p2 = 38, p3 = 39, p4 = 12;
-#if NODE_IS_RECEIVER
-        servo_get_pins(&p1, &p2, &p3, &p4);
-        char resp[64];
-        snprintf(resp, sizeof(resp), "PINS:%d,%d,%d,%d\n", p1, p2, p3, p4);
-        print_fn(resp);
-#elif NODE_IS_SENDER
-        if (espnow_sync_is_paired()) {
-            espnow_sync_send_cmd("pins");
-        }
-#endif
-        return;
-    }
-
     // ---------------- MPU-6050 Commands ----------------
-    if (strncmp(p, "mpu ", 4) == 0) {
-        const char *arg = p + 4;
-        while (*arg == ' ') arg++;
-        if (strcasecmp(arg, "on") == 0 || strcasecmp(arg, "off") == 0) {
-            imu_set_stream(parse_bool_arg(arg));
-            print_fn(imu_get_stream() ? ">> MPU telemetry stream ON\n" : ">> MPU telemetry stream OFF\n");
-        } else {
-            print_fn(">> Usage: mpu <on|off>\n");
-        }
-        return;
-    }
-
-    if (strcmp(p, "mpu_read") == 0) {
-        char line[128];
-        if (imu_format_line(line, sizeof(line))) {
-            print_fn(line);
-        } else {
-            print_fn(">> MPU-6050: no data (sensor missing or not responding)\n");
-        }
-        return;
-    }
-
-    if (strcmp(p, "mpu_get") == 0) {
-        imu_report_state(print_fn);
-        mpu_control_report(print_fn);
-        return;
-    }
-
-    if (strncmp(p, "mpu_cal ", 8) == 0) {
-        char kind[16] = {0};
-        if (sscanf(p + 8, "%15s", kind) == 1 && imu_request_cal(kind)) {
+    bool is_mpu_cmd = (strncmp(p, "mpu", 3) == 0);
+    if (is_mpu_cmd) {
+#if NODE_IS_RECEIVER
+        // Forward MPU commands to MPU Sender if this node lacks the sensor
+        if (!imu_has_sensor() && espnow_sync_is_paired()) {
+            espnow_sync_send_cmd(p);
             return;
         }
-        if (!imu_has_sensor()) {
-            print_fn("MPUCALRES:kind=none,ok=0,msg=MPU-6050 not detected. Check wiring\n");
-        } else {
-            print_fn("MPUCALRES:kind=none,ok=0,msg=Busy or invalid. Use gyro/accel/neutral/yaw/clear\n");
+#endif
+        if (strncmp(p, "mpu ", 4) == 0) {
+            const char *arg = p + 4;
+            while (*arg == ' ') arg++;
+            if (strcasecmp(arg, "on") == 0 || strcasecmp(arg, "off") == 0) {
+                imu_set_stream(parse_bool_arg(arg));
+                print_fn(imu_get_stream() ? ">> MPU telemetry stream ON\n" : ">> MPU telemetry stream OFF\n");
+            } else {
+                print_fn(">> Usage: mpu <on|off>\n");
+            }
+            return;
         }
-        return;
-    }
 
-    if (strncmp(p, "mpu_ctrl ", 9) == 0) {
-        bool en = parse_bool_arg(p + 9);
-        if (!imu_has_sensor()) {
-#if NODE_IS_RECEIVER
-            if (espnow_sync_is_paired()) {
-                espnow_sync_send_cmd(p);
-                print_fn(en ? ">> [ESP-NOW Forwarded] MPU Motion Control ON\n"
-                            : ">> [ESP-NOW Forwarded] MPU Motion Control OFF\n");
+        if (strcmp(p, "mpu_read") == 0) {
+            char line[128];
+            if (imu_format_line(line, sizeof(line))) {
+                print_fn(line);
+            } else {
+                print_fn(">> MPU-6050: no data (sensor missing or not responding)\n");
+            }
+            return;
+        }
+
+        if (strcmp(p, "mpu_get") == 0) {
+            imu_report_state(print_fn);
+            mpu_control_report(print_fn);
+            return;
+        }
+
+        if (strncmp(p, "mpu_cal ", 8) == 0) {
+            char kind[16] = {0};
+            if (sscanf(p + 8, "%15s", kind) == 1 && imu_request_cal(kind)) {
                 return;
             }
-#endif
-            print_fn(">> Error: MPU-6050 not detected. Check wiring.\n");
-            mpu_control_set_enabled(false);
-        } else {
-            mpu_control_set_enabled(en);
-        }
-        mpu_control_report(print_fn);
-        return;
-    }
-
-    if (strncmp(p, "mpu_gain ", 9) == 0) {
-        char val[16] = {0};
-        char flag[8] = {0};
-        int n = sscanf(p + 9, "%15s %7s", val, flag);
-        if (n >= 1) {
-            mpu_control_set_gain(strtof(val, NULL));
-            if (n == 2 && strcasecmp(flag, "save") == 0) {
-                mpu_control_save_settings();
-                mpu_control_report(print_fn);
+            if (!imu_has_sensor()) {
+                print_fn("MPUCALRES:kind=none,ok=0,msg=MPU-6050 not detected. Check wiring\n");
+            } else {
+                print_fn("MPUCALRES:kind=none,ok=0,msg=Busy or invalid. Use gyro/accel/neutral/yaw/clear\n");
             }
             return;
         }
-        print_fn(">> Usage: mpu_gain <0.5-4.0> [save]\n");
-        return;
-    }
 
-    if (strncmp(p, "mpu_axes ", 9) == 0 || strncmp(p, "mpu_inv ", 8) == 0) {
-        bool is_axes = (strncmp(p, "mpu_axes ", 9) == 0);
-        int r = 0, pi = 0, y = 0;
-        if (sscanf(p + (is_axes ? 9 : 8), "%d %d %d", &r, &pi, &y) == 3) {
-            if (is_axes) mpu_control_set_axes(r != 0, pi != 0, y != 0);
-            else mpu_control_set_invert(r != 0, pi != 0, y != 0);
+        if (strncmp(p, "mpu_ctrl ", 9) == 0) {
+            bool en = parse_bool_arg(p + 9);
+            if (!imu_has_sensor()) {
+                print_fn(">> Error: MPU-6050 not detected. Check wiring.\n");
+                mpu_control_set_enabled(false);
+            } else {
+                mpu_control_set_enabled(en);
+            }
             mpu_control_report(print_fn);
-        } else {
-            print_fn(is_axes ? ">> Usage: mpu_axes <roll 0|1> <pitch 0|1> <yaw 0|1>\n"
-                             : ">> Usage: mpu_inv <roll 0|1> <pitch 0|1> <yaw 0|1>\n");
+            return;
         }
-        return;
+
+        if (strncmp(p, "mpu_gain ", 9) == 0) {
+            char val[16] = {0};
+            char flag[8] = {0};
+            int n = sscanf(p + 9, "%15s %7s", val, flag);
+            if (n >= 1) {
+                mpu_control_set_gain(strtof(val, NULL));
+                if (n == 2 && strcasecmp(flag, "save") == 0) {
+                    mpu_control_save_settings();
+                    mpu_control_report(print_fn);
+                }
+                return;
+            }
+            print_fn(">> Usage: mpu_gain <0.5-4.0> [save]\n");
+            return;
+        }
+
+        if (strncmp(p, "mpu_axes ", 9) == 0 || strncmp(p, "mpu_inv ", 8) == 0) {
+            bool is_axes = (strncmp(p, "mpu_axes ", 9) == 0);
+            int r = 0, pi = 0, y = 0;
+            if (sscanf(p + (is_axes ? 9 : 8), "%d %d %d", &r, &pi, &y) == 3) {
+                if (is_axes) mpu_control_set_axes(r != 0, pi != 0, y != 0);
+                else mpu_control_set_invert(r != 0, pi != 0, y != 0);
+                mpu_control_report(print_fn);
+            } else {
+                print_fn(is_axes ? ">> Usage: mpu_axes <roll 0|1> <pitch 0|1> <yaw 0|1>\n"
+                                 : ">> Usage: mpu_inv <roll 0|1> <pitch 0|1> <yaw 0|1>\n");
+            }
+            return;
+        }
     }
 
 #if NODE_IS_SENDER
-    if (is_manual_motion_cmd(p)) {
+    if (is_arm_motion_override(p)) {
         release_mpu_control(print_fn);
     }
 
     if (espnow_sync_is_paired()) {
         espnow_sync_send_cmd(p);
-        print_fn(">> [ESP-NOW Forwarded] ");
-        print_fn(p);
-        print_fn("\n");
         return;
     } else {
         print_fn(">> [ESP-NOW Warning] Arm Receiver not paired yet. Scanning...\n");
@@ -320,6 +281,26 @@ void command_process(const char *cmd_line, command_print_fn_t print_fn) {
     }
 #else
     // ---------------- Arm & Scissor Receiver Execution ----------------
+    if (strncmp(p, "pins ", 5) == 0) {
+        int p1 = -1, p2 = -1, p3 = -1, p4 = -1;
+        if (sscanf(p + 5, "%d %d %d %d", &p1, &p2, &p3, &p4) == 4) {
+            servo_set_pins(p1, p2, p3, p4);
+            char resp[64];
+            snprintf(resp, sizeof(resp), "PINS:%d,%d,%d,%d\n", p1, p2, p3, p4);
+            print_fn(resp);
+            return;
+        }
+    }
+
+    if (strcmp(p, "pins") == 0) {
+        int p1 = 1, p2 = 38, p3 = 39, p4 = 12;
+        servo_get_pins(&p1, &p2, &p3, &p4);
+        char resp[64];
+        snprintf(resp, sizeof(resp), "PINS:%d,%d,%d,%d\n", p1, p2, p3, p4);
+        print_fn(resp);
+        return;
+    }
+
     if (strncmp(p, "claw ", 5) == 0) {
         const char *arg = p + 5;
         int angle = -1;
@@ -376,7 +357,7 @@ void command_process(const char *cmd_line, command_print_fn_t print_fn) {
         servo_set_scissor_percent(pct);
         char msg[64];
         snprintf(msg, sizeof(msg), "ANG:%d,%d,%d,%d\n", servo_get_angle(0), servo_get_angle(1), servo_get_angle(2), servo_get_angle(3));
-            print_fn(msg);
+        print_fn(msg);
         return;
     }
 
@@ -435,24 +416,28 @@ void command_process(const char *cmd_line, command_print_fn_t print_fn) {
     if (strncmp(p, "move ", 5) == 0) {
         int s1 = 90, s2 = 90, s3 = 90, s4 = servo_get_angle(3), dur = 400;
         int n = sscanf(p + 5, "%d %d %d %d %d", &s1, &s2, &s3, &s4, &dur);
-        if (n == 4) {
-            dur = s4;
-            s4 = servo_get_angle(3);
+        if (n >= 5) {
             servo_move_smooth(s1, s2, s3, s4, dur);
             char msg[96];
             snprintf(msg, sizeof(msg), ">> Moving to (%d, %d, %d, %d) over %dms\n", s1, s2, s3, s4, dur);
             print_fn(msg);
             return;
-        } else if (n >= 5) {
+        } else if (n == 4) {
+            if (s4 > 180) {
+                dur = s4;
+                s4 = servo_get_angle(3);
+            } else {
+                dur = 400;
+            }
             servo_move_smooth(s1, s2, s3, s4, dur);
             char msg[96];
             snprintf(msg, sizeof(msg), ">> Moving to (%d, %d, %d, %d) over %dms\n", s1, s2, s3, s4, dur);
             print_fn(msg);
             return;
         } else if (n == 3) {
-            servo_move_smooth(s1, s2, s3, s4, 400);
+            servo_move_smooth(s1, s2, s3, servo_get_angle(3), 400);
             char msg[96];
-            snprintf(msg, sizeof(msg), ">> Moving to (%d, %d, %d, %d) over 400ms\n", s1, s2, s3, s4);
+            snprintf(msg, sizeof(msg), ">> Moving to (%d, %d, %d, %d) over 400ms\n", s1, s2, s3, servo_get_angle(3));
             print_fn(msg);
             return;
         } else {
@@ -647,7 +632,7 @@ void command_process(const char *cmd_line, command_print_fn_t print_fn) {
             char line[ACTION_MAX_LEN + 16];
             snprintf(line, sizeof(line), "ACT:%d=%s\n", i, servo_action_get(i));
             print_fn(line);
-            vTaskDelay(pdMS_TO_TICKS(25));
+            vTaskDelay(pdMS_TO_TICKS(20));
         }
         return;
     }
@@ -658,7 +643,7 @@ void command_process(const char *cmd_line, command_print_fn_t print_fn) {
             char line[ACTION_MAX_LEN + 16];
             snprintf(line, sizeof(line), "ACT:%d=%s\n", i, servo_action_get(i));
             print_fn(line);
-            vTaskDelay(pdMS_TO_TICKS(25));
+            vTaskDelay(pdMS_TO_TICKS(20));
         }
         print_fn(">> Actions restored to defaults.\n");
         return;

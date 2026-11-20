@@ -19,6 +19,16 @@ let isDraggingLift = false;
 let pendingServoCmds = {};
 let servoThrottleTimer = null;
 
+// Global release protection prevents drag states from sticking on mobile devices
+window.addEventListener("pointerup", () => {
+  isDraggingLift = false;
+  for (let i = 0; i < 4; i++) isDraggingSlider[i] = false;
+});
+window.addEventListener("touchend", () => {
+  isDraggingLift = false;
+  for (let i = 0; i < 4; i++) isDraggingSlider[i] = false;
+});
+
 function initServoStorage() {
   try {
     const storedNames = localStorage.getItem("arm_servo_names_v3");
@@ -115,7 +125,7 @@ function updateScissorUI() {
   const rangeBadge = document.getElementById("saved-range-badge");
   const trimBadge = document.getElementById("trim-sync-badge");
 
-  if (liftSl) liftSl.value = scissorPercent;
+  if (liftSl && !isDraggingLift) liftSl.value = scissorPercent;
   if (liftVal) liftVal.innerText = `${scissorPercent}% (${servoAngles[3]}°)`;
   if (rangeBadge) rangeBadge.innerText = `Range: ${scissorMin}° – ${scissorMax}°`;
 
@@ -506,7 +516,7 @@ function triggerThrottledSend() {
       for (const k in cmds) {
         sendCommand(cmds[k]);
       }
-    }, 70);
+    }, 50);
   }
 }
 

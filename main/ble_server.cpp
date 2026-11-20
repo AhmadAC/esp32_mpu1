@@ -11,6 +11,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
+#include "freertos/semphr.h"
 #include "freertos/timers.h"
 #include "nimble/nimble_port.h"
 #include "nimble/nimble_port_freertos.h"
@@ -43,6 +44,7 @@ static uint8_t  s_own_addr_type = BLE_OWN_ADDR_PUBLIC;
 static ble_cmd_callback_t s_cmd_handler = NULL;
 
 static QueueHandle_t s_cmd_queue = NULL;
+static SemaphoreHandle_t s_notify_mutex = NULL;
 static TimerHandle_t s_rx_flush_timer = NULL;
 static portMUX_TYPE  s_rx_mux = portMUX_INITIALIZER_UNLOCKED;
 static char          s_rx_line_buf[BLE_CMD_MAX_LEN];
@@ -280,7 +282,6 @@ static void ble_advertise(void) {
     memset(&fields, 0, sizeof(fields));
     fields.flags = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;
 
-    // Place 128-bit UART service UUID into primary ADV payload so iOS CoreBluetooth can filter and discover it
     fields.uuids128 = (ble_uuid128_t *)&gatt_svr_svc_uart_uuid;
     fields.num_uuids128 = 1;
     fields.uuids128_is_complete = 1;
@@ -300,7 +301,6 @@ static void ble_advertise(void) {
         return;
     }
 
-    // Place full complete device name in scan response
     memset(&rsp_fields, 0, sizeof(rsp_fields));
     rsp_fields.name = (uint8_t *)BLE_DEVICE_NAME;
     rsp_fields.name_len = strlen(BLE_DEVICE_NAME);
@@ -314,16 +314,15 @@ static void ble_advertise(void) {
     memset(&adv_params, 0, sizeof(adv_params));
     adv_params.conn_mode = BLE_GAP_CONN_MODE_UND;
     adv_params.disc_mode = BLE_GAP_DISC_MODE_GEN;
-    adv_params.itvl_min = 0x0030; // 30 ms for responsive iOS scanning
-    adv_params.itvl_max = 0x0060; // 60 ms
+    adv_params.itvl_min = 0x0030;
+    adv_params.itvl_max = 0x0060;
 
     rc = ble_gap_adv_start(s_own_addr_type, NULL, BLE_HS_FOREVER,
                            &adv_params, ble_gap_event, NULL);
     if (rc != 0 && rc != BLE_HS_EALREADY) {
         ESP_LOGE(TAG, "Error starting advertising: rc=%d", rc);
     } else {
-        ESP_LOGI(TAG, "Advertising BLE as '%s' (Short: '%s', NUS UUID in primary ADV)",
-                 BLE_DEVICE_NAME, short_name);
+        ESP_LOGI(TAG, "Advertising BLE as '%s' (NUS UUID in primary ADV)", BLE_DEVICE_NAME);
     }
 }
 
@@ -358,6 +357,7 @@ static void ble_on_reset(int reason) {
 void ble_server_init(ble_cmd_callback_t cmd_handler) {
     s_cmd_handler = cmd_handler;
     s_cmd_queue = xQueueCreate(16, BLE_CMD_MAX_LEN);
+    s_notify_mutex = xSemaphoreCreateMutex();
     s_rx_flush_timer = xTimerCreate("ble_rx_flush", pdMS_TO_TICKS(60), pdFALSE, NULL, rx_flush_timer_cb);
     xTaskCreatePinnedToCore(ble_cmd_exec_task, "ble_cmd_task", 6144, NULL, 5, NULL, 1);
 
@@ -405,6 +405,12 @@ void ble_server_send_notify(const char *message) {
     size_t len = strlen(message);
     if (len == 0) return;
 
+    if (s_notify_mutex != NULL) {
+        if (xSemaphoreTake(s_notify_mutex, pdMS_TO_TICKS(150)) != pdTRUE) {
+            return;
+        }
+    }
+
     const size_t CHUNK_MAX = 160;
     size_t offset = 0;
     while (offset < len) {
@@ -419,5 +425,9 @@ void ble_server_send_notify(const char *message) {
         if (offset < len) {
             vTaskDelay(pdMS_TO_TICKS(10));
         }
+    }
+
+    if (s_notify_mutex != NULL) {
+        xSemaphoreGive(s_notify_mutex);
     }
 }

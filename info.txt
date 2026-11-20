@@ -22,7 +22,7 @@ NODE 2: ARM RECEIVER (Actuator Controller)
   executes smooth sinusoidal easing, handles auto-idle motor detaching, and executes
   stored programmable actions.
 
-
+Safe, unshared GPIOs: 4, 5, 6, 7, 10, 11, 12, 13, 14, 15, 16, 17, 18, 21
 2. HARDWARE WIRING SPECIFICATION:
 --------------------------------------------------------------------------------
 A. MPU SENDER BOARD:

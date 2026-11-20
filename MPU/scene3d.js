@@ -19,7 +19,6 @@ const Scene3D = (function () {
   let running = false;
   let isStationary = false;
 
-  // Displayed (smoothed) orientation, target orientation
   const shown = { roll: 0, pitch: 0, yaw: 0 };
   const target = { roll: 0, pitch: 0, yaw: 0 };
 
@@ -59,7 +58,7 @@ const Scene3D = (function () {
   }
 
   function camera() {
-    const target3 = mode === "arm" ? [0.8, 0, 0.1] : [0, 0, 0];
+    const target3 = mode === "arm" ? [0.6, 0, 0.2] : [0, 0, 0.2];
     const pos = add(target3, [
       camDist * Math.cos(camEl) * Math.cos(camAz),
       camDist * Math.cos(camEl) * Math.sin(camAz),
@@ -112,7 +111,7 @@ const Scene3D = (function () {
   }
 
   function shade(color, n) {
-    const k = 0.32 + 0.68 * Math.max(0, dot(n, LIGHT));
+    const k = 0.35 + 0.65 * Math.max(0, dot(n, LIGHT));
     return `rgb(${Math.round(color[0] * k)},${Math.round(color[1] * k)},${Math.round(color[2] * k)})`;
   }
 
@@ -120,18 +119,17 @@ const Scene3D = (function () {
     const items = [];
     for (const poly of polys) {
       const p = poly.pts;
+      if (p.length < 3) continue;
       const c = scale(p.reduce((acc, q) => add(acc, q), [0, 0, 0]), 1 / p.length);
       const toCam = sub(cam.pos, c);
-      let n = poly.outward;
-      if (n) {
-        if (dot(n, toCam) < 0) continue;
-      } else {
-        n = norm(cross(sub(p[1], p[0]), sub(p[2], p[0])));
-        if (dot(n, toCam) < 0) n = scale(n, -1);
+      let n = norm(cross(sub(p[1], p[0]), sub(p[2], p[0])));
+      if (dot(n, toCam) < 0) {
+        n = scale(n, -1);
       }
       items.push({ poly, n, depth: Math.sqrt(dot(toCam, toCam)) });
     }
     items.sort((a, b) => b.depth - a.depth);
+
     for (const it of items) {
       const pr = it.poly.pts.map(q => project(cam, q));
       ctx.beginPath();
@@ -144,17 +142,6 @@ const Scene3D = (function () {
       ctx.lineWidth = 0.8;
       ctx.stroke();
     }
-  }
-
-  function withOutward(polys, center) {
-    for (const poly of polys) {
-      const p = poly.pts;
-      const c = scale(p.reduce((acc, q) => add(acc, q), [0, 0, 0]), 1 / p.length);
-      let n = norm(cross(sub(p[1], p[0]), sub(p[2], p[0])));
-      if (dot(n, sub(c, center)) < 0) n = scale(n, -1);
-      poly.outward = n;
-    }
-    return polys;
   }
 
   function line3(cam, a, b, color, width) {
@@ -202,45 +189,43 @@ const Scene3D = (function () {
     }
   }
 
-  // Real GY-521 8-Pin breakout geometry standing upright on its pins
   function buildImuBoard(R) {
     const polys = [];
     const o = [0, 0, 0.4];
 
-    polys.push(...withOutward(boxPolys(o, R, [0.04, 1.05, 0.8], [18, 55, 115]), o));
+    polys.push(...boxPolys(o, R, [0.04, 1.05, 0.8], [18, 55, 115]));
 
     for (const side of [-1, 1]) {
       const hole = add(o, mv(R, [0, side * 0.82, 0.55]));
-      polys.push(...withOutward(prismPolys(hole, mm(R, rotY(Math.PI / 2)), 0.12, 0.05, 12, [212, 175, 55]), hole));
+      polys.push(...prismPolys(hole, mm(R, rotY(Math.PI / 2)), 0.12, 0.05, 12, [212, 175, 55]));
     }
 
     const chipC = add(o, mv(R, [0.06, 0.0, 0.0]));
-    polys.push(...withOutward(boxPolys(chipC, R, [0.03, 0.32, 0.32], [28, 32, 38]), chipC));
+    polys.push(...boxPolys(chipC, R, [0.03, 0.32, 0.32], [28, 32, 38]));
 
     const dotC = add(o, mv(R, [0.09, -0.22, 0.22]));
-    polys.push(...withOutward(boxPolys(dotC, R, [0.01, 0.04, 0.04], [220, 220, 220]), dotC));
+    polys.push(...boxPolys(dotC, R, [0.01, 0.04, 0.04], [220, 220, 220]));
 
     const ledC = add(o, mv(R, [0.06, 0.65, -0.2]));
-    polys.push(...withOutward(boxPolys(ledC, R, [0.03, 0.08, 0.08], [34, 197, 94]), ledC));
+    polys.push(...boxPolys(ledC, R, [0.03, 0.08, 0.08], [34, 197, 94]));
 
     const regC = add(o, mv(R, [0.06, 0.0, 0.52]));
-    polys.push(...withOutward(boxPolys(regC, R, [0.02, 0.18, 0.12], [47, 55, 69]), regC));
+    polys.push(...boxPolys(regC, R, [0.02, 0.18, 0.12], [47, 55, 69]));
 
     const headerC = add(o, mv(R, [-0.12, 0.0, -0.8]));
-    polys.push(...withOutward(boxPolys(headerC, R, [0.12, 1.02, 0.12], [15, 23, 42]), headerC));
+    polys.push(...boxPolys(headerC, R, [0.12, 1.02, 0.12], [15, 23, 42]));
 
     for (let i = 0; i < 8; i++) {
       const yPos = -0.875 + i * 0.25;
       const pinLeg = add(o, mv(R, [-0.3, yPos, -0.8]));
-      polys.push(...withOutward(boxPolys(pinLeg, R, [0.15, 0.035, 0.035], [234, 179, 8]), pinLeg));
+      polys.push(...boxPolys(pinLeg, R, [0.15, 0.035, 0.035], [234, 179, 8]));
       const pinFoot = add(o, mv(R, [-0.45, yPos, -1.1]));
-      polys.push(...withOutward(boxPolys(pinFoot, R, [0.035, 0.035, 0.3], [234, 179, 8]), pinFoot));
+      polys.push(...boxPolys(pinFoot, R, [0.035, 0.035, 0.3], [234, 179, 8]));
     }
 
     return polys;
   }
 
-  // 4-Axis Arm + Scissor Lift geometry
   function buildArm(angles, geom) {
     const s1 = angles[0] !== undefined ? angles[0] : 90;
     const s2 = angles[1] !== undefined ? angles[1] : 90;
@@ -251,63 +236,67 @@ const Scene3D = (function () {
     const I = [1, 0, 0, 0, 1, 0, 0, 0, 1];
     const groundZ = -1.65;
 
-    // Fixed bottom plate resting on ground
+    // Fixed bottom chassis resting on ground
     const groundPlate = [0, 0, groundZ + 0.08];
-    polys.push(...withOutward(boxPolys(groundPlate, I, [1.35, 1.15, 0.08], [47, 55, 69]), groundPlate));
+    polys.push(...boxPolys(groundPlate, I, [1.35, 1.15, 0.08], [30, 41, 59]));
 
-    // Scissor lift vertical elevation driven by S4 (0-180 deg -> 0.0 to 1.1 units)
+    // Scissor lift vertical elevation driven by S4 (0-180 deg -> 0.1 to 1.35 units)
     const scissorNorm = Math.max(0, Math.min(180, s4)) / 180.0;
-    const liftH = scissorNorm * 1.1;
+    const liftH = 0.12 + scissorNorm * 1.25;
 
-    // Scissor linkage struts (crossed scissor arms that expand/contract)
-    const scissorMidZ = groundZ + 0.16 + liftH * 0.5;
-    const strutAngle = 0.22 + scissorNorm * 0.52;
-    const strutHalf = 0.42;
+    // 2-tier scissor crossed linkage struts (expand & contract as S4 changes)
+    const tiers = 2;
+    const tierH = liftH / tiers;
+    for (let t = 0; t < tiers; t++) {
+      const tz = groundZ + 0.16 + (t + 0.5) * tierH;
+      const strutAngle = 0.15 + (1.0 - scissorNorm) * 0.45;
+      const halfStrut = Math.max(0.28, Math.sqrt(0.18 + tierH * tierH * 0.4));
 
-    for (const side of [-0.62, 0.62]) {
-      const R1 = rotY(strutAngle);
-      const R2 = rotY(-strutAngle);
-      const c1 = [0, side, scissorMidZ];
-      const c2 = [0, side, scissorMidZ];
-      polys.push(...withOutward(boxPolys(c1, R1, [0.05, 0.035, strutHalf], [234, 179, 8]), c1));
-      polys.push(...withOutward(boxPolys(c2, R2, [0.05, 0.035, strutHalf], [202, 138, 4]), c2));
+      for (const side of [-0.65, 0.65]) {
+        const R1 = rotY(strutAngle);
+        const R2 = rotY(-strutAngle);
+        const c1 = [0, side, tz];
+        const c2 = [0, side, tz];
+        polys.push(...boxPolys(c1, R1, [0.045, 0.03, halfStrut], [245, 158, 11]));
+        polys.push(...boxPolys(c2, R2, [0.045, 0.03, halfStrut], [217, 119, 6]));
+      }
     }
 
-    // Elevated arm mounting stage (rises with scissor lift)
+    // Elevated platform stage (rises smoothly with the scissor lift)
     const platformZ = groundZ + 0.16 + liftH;
     const upperPlatform = [0, 0, platformZ + 0.09];
-    polys.push(...withOutward(boxPolys(upperPlatform, I, [1.25, 1.0, 0.09], [71, 85, 105]), upperPlatform));
+    polys.push(...boxPolys(upperPlatform, I, [1.25, 1.05, 0.09], [71, 85, 105]));
 
     // Turntable pedestal on top of the scissor platform
     const pedestal = [0, 0, platformZ + 0.09 + 0.45];
-    polys.push(...withOutward(boxPolys(pedestal, I, [0.42, 0.42, 0.45], [100, 116, 139]), pedestal));
+    polys.push(...boxPolys(pedestal, I, [0.42, 0.42, 0.45], [100, 116, 139]));
 
     // Shoulder joint S
     const S = [0, 0, platformZ + 0.09 + 0.9];
-    polys.push(...withOutward(prismPolys(S, I, 0.34, 0.46, 14, [245, 158, 11]), S));
+    polys.push(...prismPolys(S, I, 0.34, 0.46, 14, [245, 158, 11]));
 
     // Upper arm link (Shoulder rotation via S3)
     const phi1 = (s3 - 90) * DEG;
     const R1 = rotY(phi1);
     const L1 = geom.l1;
     const c1 = add(S, mv(R1, [0, 0, L1 / 2]));
-    polys.push(...withOutward(boxPolys(c1, R1, [0.2, 0.2, L1 / 2], [56, 189, 248]), c1));
+    polys.push(...boxPolys(c1, R1, [0.2, 0.2, L1 / 2], [56, 189, 248]));
 
     // Elbow joint E
     const E = add(S, mv(R1, [0, 0, L1]));
-    polys.push(...withOutward(prismPolys(E, I, 0.27, 0.34, 14, [245, 158, 11]), E));
+    polys.push(...prismPolys(E, I, 0.27, 0.34, 14, [245, 158, 11]));
 
     // Forearm link (Arm rotation via S2)
     const phi2 = phi1 + (90 + (s2 - 90)) * DEG;
     const R2 = rotY(phi2);
     const L2 = geom.l2;
     const c2 = add(E, mv(R2, [0, 0, L2 / 2]));
-    polys.push(...withOutward(boxPolys(c2, R2, [0.16, 0.16, L2 / 2], [14, 165, 233]), c2));
+    polys.push(...boxPolys(c2, R2, [0.16, 0.16, L2 / 2], [14, 165, 233]));
 
     // Wrist W & Claw palm
     const W = add(E, mv(R2, [0, 0, L2]));
     const palm = add(W, mv(R2, [0, 0, 0.14]));
-    polys.push(...withOutward(boxPolys(palm, R2, [0.2, 0.42, 0.14], [100, 116, 139]), palm));
+    polys.push(...boxPolys(palm, R2, [0.2, 0.42, 0.14], [100, 116, 139]));
 
     // Gripper fingers (Claw aperture via S1)
     const open = Math.max(0, Math.min(180, s1)) / 180 * 50 * DEG;
@@ -315,7 +304,7 @@ const Scene3D = (function () {
       const Rf = mm(R2, rotX(-side * open));
       const base = add(W, mv(R2, [0, side * 0.34, 0.28]));
       const fc = add(base, mv(Rf, [0, 0, 0.4]));
-      polys.push(...withOutward(boxPolys(fc, Rf, [0.09, 0.07, 0.4], [52, 211, 153]), fc));
+      polys.push(...boxPolys(fc, Rf, [0.09, 0.07, 0.4], [52, 211, 153]));
     }
 
     return { polys, groundZ, S, E, W };
@@ -372,8 +361,8 @@ const Scene3D = (function () {
 
   function resize() {
     if (!canvas) return;
-    const rect = canvas.parentElement.getBoundingClientRect();
-    const w = Math.max(200, Math.floor(rect.width));
+    const rect = canvas.parentElement ? canvas.parentElement.getBoundingClientRect() : { width: 320 };
+    const w = Math.max(200, Math.floor(rect.width || 320));
     const h = Math.max(220, Math.floor(w * 0.82));
     const dpr = window.devicePixelRatio || 1;
     cssW = w;
