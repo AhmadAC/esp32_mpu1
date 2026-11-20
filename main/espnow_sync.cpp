@@ -133,8 +133,6 @@ static void process_incoming_packet(const espnow_rx_item_t *item) {
             bool mpu_active = (pkt->payload.servo_set.flags & 1) != 0;
 
             if (mpu_active) {
-                // When actively tracking MPU, update ONLY the 3 arm joints.
-                // Do NOT clobber S4 (Scissor Lift).
                 servo_set_angle(0, s1);
                 servo_set_angle(1, s2);
                 servo_set_angle(2, s3);
@@ -160,7 +158,12 @@ static void process_incoming_packet(const espnow_rx_item_t *item) {
         if (s_cmd_handler != NULL) {
             s_cmd_handler(cmd_copy);
         } else {
-            command_process(cmd_copy, ble_server_send_notify);
+            command_process(cmd_copy, [](const char *reply) {
+                if (reply && strlen(reply) > 0) {
+                    espnow_sync_send_reply(reply);
+                    ble_server_send_notify(reply);
+                }
+            });
         }
         break;
     }
@@ -279,9 +282,11 @@ static void notify_link_state(void) {
 
 static void espnow_sync_task(void *pvParameters) {
     (void)pvParameters;
+    uint32_t loop_counter = 0;
 
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(500));
+        loop_counter++;
 
         int64_t now_us = esp_timer_get_time();
 
@@ -321,14 +326,22 @@ static void espnow_sync_task(void *pvParameters) {
                     hb.payload.heartbeat.uptime_ms = (uint32_t)(now_us / 1000);
                     send_packet(s_peer_mac, &hb);
                 }
-            }
-        }
 
-        if (!s_is_paired) {
+                // Broadcast live ESP-NOW link state and RSSI to BLE client every 2 seconds
+                if (loop_counter % 4 == 0) {
+                    notify_link_state();
+                }
+            }
+        } else {
+            // While disconnected, broadcast discovery beacons and keep BLE client informed
             espnow_packet_t disc = {};
             disc.msg_type = ESPNOW_MSG_DISCOVERY;
             disc.payload.discovery.proto_version = 1;
             send_packet(BCAST_MAC, &disc);
+
+            if (loop_counter % 6 == 0) {
+                notify_link_state();
+            }
         }
     }
 }
