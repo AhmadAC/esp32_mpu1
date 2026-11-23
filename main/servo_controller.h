@@ -10,14 +10,14 @@ extern "C" {
 #endif
 
 // 4-Axis Robotic Arm & Scissor Lift Servo Mapping:
-// S1: Claw (Gripper) - Default GPIO 1
-// S2: Arm            - Default GPIO 38
-// S3: Shoulder       - Default GPIO 39
-// S4: Scissor Lift   - Default GPIO 12
+// S1: Claw (Gripper) - Default GPIO 4 (Safe, unshared GPIO on Header J1)
+// S2: Arm            - Default GPIO 5 (Safe, unshared GPIO on Header J1)
+// S3: Shoulder       - Default GPIO 6 (Safe, unshared GPIO on Header J1)
+// S4: Scissor Lift   - Default GPIO 12 (Header J1)
 #define SERVO_COUNT         4
-#define SERVO_1_PIN_DEFAULT GPIO_NUM_1
-#define SERVO_2_PIN_DEFAULT GPIO_NUM_38
-#define SERVO_3_PIN_DEFAULT GPIO_NUM_39
+#define SERVO_1_PIN_DEFAULT GPIO_NUM_4
+#define SERVO_2_PIN_DEFAULT GPIO_NUM_5
+#define SERVO_3_PIN_DEFAULT GPIO_NUM_6
 #define SERVO_4_PIN_DEFAULT GPIO_NUM_12
 
 #define SERVO_1_PIN         SERVO_1_PIN_DEFAULT

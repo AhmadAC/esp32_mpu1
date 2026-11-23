@@ -1,6 +1,6 @@
 let servoAngles = [90, 90, 90, 90];
 let servoOffsets = [0, 0, 0, 0];
-let servoPins = [1, 38, 39, 12];
+let servoPins = [4, 5, 6, 12];
 let servoEnabled = [false, false, false, false];
 let autoIdleEnabled = false;
 let servoNames = ["Servo 1 — Claw", "Servo 2 — Arm", "Servo 3 — Shoulder", "Servo 4 — Scissor Lift"];
@@ -354,7 +354,7 @@ function onLiftSliderCommit(pctVal) {
 function nudgeLiftPercent(deltaPct) {
   lastSliderEditMs[3] = Date.now();
   scissorPercent = Math.max(0, Math.min(100, scissorPercent + deltaPct));
-  servoAngles[3] = percentToAngle(scissorPercent, scissorMin, scissorMax);
+  servoAngles[3] = percentToAngle(scissorMin, scissorMax, scissorPercent);
   servoEnabled[3] = true;
   updateAllServoUI();
   sendCommand(`s4 ${servoAngles[3]}`);

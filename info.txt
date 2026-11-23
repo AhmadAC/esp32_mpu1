@@ -1,3 +1,4 @@
+
 ================================================================================
           YD-ESP32-S3 DUAL-NODE WIRELESS ROBOTIC ARM SYSTEM (ESP-NOW)
 ================================================================================
@@ -16,13 +17,16 @@ NODE 1: MPU SENDER (Motion Controller)
   transmits wireless motion vectors.
 
 NODE 2: ARM RECEIVER (Actuator Controller)
-- Actuators: 3 MP90S servos for 3-DOF Arm (Claw GPIO 1, Arm GPIO 38, Shoulder GPIO 39)
+- Actuators: 3 MP90S/SG90 servos for 3-DOF Arm + 1 MG996R for Scissor Lift
+- Signal Pins: Claw GPIO 4, Arm GPIO 5, Shoulder GPIO 6, Scissor Lift GPIO 12
 - Firmware Image: build_out/esp32s3_arm_receiver.bin
 - Functions: Receives wireless motion packets, drives 50Hz LEDC PWM channels,
   executes smooth sinusoidal easing, handles auto-idle motor detaching, and executes
   stored programmable actions.
 
-Safe, unshared GPIOs: 4, 5, 6, 7, 10, 11, 12, 13, 14, 15, 16, 17, 18, 21
+Safe, unshared GPIOs on Header J1: 4, 5, 6, 7, 10, 11, 12, 13, 14, 15, 16, 17, 18, 21
+Avoid for Servos: GPIO 38 (RGB LED), GPIO 39 (MTCK JTAG), GPIO 35-37 (Octal PSRAM)
+
 2. HARDWARE WIRING SPECIFICATION:
 --------------------------------------------------------------------------------
 A. MPU SENDER BOARD:
@@ -33,13 +37,14 @@ A. MPU SENDER BOARD:
    4     SDA            GPIO 8              I2C0 Data
    7     AD0            GND                 I2C Address 0x68 (3.3V = 0x69)
 
-B. ARM RECEIVER BOARD:
-   Servo Channel   Joint           YD-ESP32-S3 Pin     Notes
-   Common GND      Ground          GND                 Shared Ground with 5V PSU
-   Servo Power     5V Power        External 5V         5V 2A+ external supply
-   Servo 1 (S1)    Claw (Gripper)  GPIO 1              50Hz LEDC PWM (550-2450us)
-   Servo 2 (S2)    Arm             GPIO 38             50Hz LEDC PWM (550-2450us)
-   Servo 3 (S3)    Shoulder        GPIO 39             50Hz LEDC PWM (550-2450us)
+B. ARM RECEIVER BOARD (All Signals on Header J1):
+   Servo Channel   Joint           YD-ESP32-S3 Pin     Power Connection
+   Common GND      Ground          GND (J1-22)         Common Ground tied to external 5V PSU!
+   Servo Power     5V Power        External 5V         5V 2.5A+ supply (Do NOT power 4 servos from 3.3V!)
+   Servo 1 (S1)    Claw (Gripper)  GPIO 4 (J1-4)       50Hz LEDC PWM (500-2500us)
+   Servo 2 (S2)    Arm             GPIO 5 (J1-5)       50Hz LEDC PWM (500-2500us)
+   Servo 3 (S3)    Shoulder        GPIO 6 (J1-6)       50Hz LEDC PWM (500-2500us)
+   Servo 4 (S4)    Scissor Lift    GPIO 12 (J1-18)     50Hz LEDC PWM (500-2500us)
 
 
 3. AUTOMATIC ZERO-INTERVENTION ESP-NOW DISCOVERY & PAIRING:
@@ -73,11 +78,25 @@ The `.github/workflows/build.yml` runs a dual-pass build:
 - mpu_cal <gyro|accel|neutral|yaw|clear>: Calibrate MPU sensors
 - claw <0-180|open|close>              : Set Claw angle
 - arm <0-180> / shoulder <0-180>       : Move Arm or Shoulder
-- s1 <deg> / s2 <deg> / s3 <deg>       : Move individual joint
-- set <s1> <s2> <s3>                   : Set all 3 angles immediately
-- move <s1> <s2> <s3> [ms]             : Smoothly move all 3 joints over duration
-- home                                 : Move all 3 joints to neutral (90 deg)
+- s1 <deg> / s2 <deg> / s3 <deg> / s4  : Move individual joint
+- lift <0-100>                         : Set scissor lift proportional height
+- pins <p1> <p2> <p3> <p4>             : Remap hardware GPIO pins
+- set <s1> <s2> <s3> [s4]              : Set all angles immediately
+- move <s1> <s2> <s3> <s4> [ms]        : Smoothly move joints over duration
+- home                                 : Move all 4 joints to neutral (90 deg)
 - stop                                 : Halt motion and release MPU control
 - detach                               : Disconnect PWM signal to relax servos
 - status                               : Query full system state
 ================================================================================
+
+Steps to Verify Now on Your Hardware:
+
+1.  In the Web UI or via the bottom command input, enter: pins 4 5 6 12 and tap
+    Send.
+2.  Move your yellow/orange servo signal wires to:
+      - Claw (S1): GPIO 4
+      - Arm (S2): GPIO 5
+      - Shoulder (S3): GPIO 6
+      - Scissor (S4): GPIO 12
+3.  Ensure the arm servo Ground wires are connected to the ESP32 GND pin (common
+    ground) and their 5V wires are powered from 5V (never 3.3V).

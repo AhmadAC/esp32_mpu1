@@ -36,7 +36,7 @@ extern "C" void app_main(void) {
     esp_log_level_set("wifi", ESP_LOG_WARN);
 
 #if NODE_IS_RECEIVER
-    // Clamp physical servo signal pins LOW immediately: Claw(GP1), Arm(GP38), Shoulder(GP39), Scissor(GP12)
+    // Initialize default physical servo signal pins cleanly: Claw(GP4), Arm(GP5), Shoulder(GP6), Scissor(GP12)
     const gpio_num_t servo_pins[SERVO_COUNT] = {
         SERVO_1_PIN_DEFAULT,
         SERVO_2_PIN_DEFAULT,
@@ -47,7 +47,6 @@ extern "C" void app_main(void) {
         gpio_reset_pin(servo_pins[i]);
         gpio_set_direction(servo_pins[i], GPIO_MODE_OUTPUT);
         gpio_set_level(servo_pins[i], 0);
-        gpio_pulldown_en(servo_pins[i]);
     }
 #endif
 
@@ -75,7 +74,7 @@ extern "C" void app_main(void) {
     ble_server_init(command_on_ble_received);
 
 #if NODE_IS_RECEIVER
-    // 4. Arm Receiver: 4-Servo LEDC PWM Controller (Claw GP1, Arm GP38, Shoulder GP39, Scissor Lift GP12)
+    // 4. Arm Receiver: 4-Servo LEDC PWM Controller (Claw GP4, Arm GP5, Shoulder GP6, Scissor Lift GP12)
     servo_controller_init();
 
     // 5. Arm Receiver: ESP-NOW Auto-Sync Receiver

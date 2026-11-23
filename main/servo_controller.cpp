@@ -2,7 +2,6 @@
 #include "ble_server.h"
 #include "driver/ledc.h"
 #include "driver/gpio.h"
-#include "esp_rom_gpio.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "nvs.h"
@@ -120,8 +119,7 @@ static void notify_action_state(bool running, int slot, bool loop) {
 
 static void reconfig_ledc_channel(int idx) {
     gpio_num_t pin = s_servo_pins[idx];
-    esp_rom_gpio_pad_select_gpio(pin);
-    gpio_set_direction(pin, GPIO_MODE_OUTPUT);
+    gpio_reset_pin(pin);
 
     ledc_channel_config_t ledc_ch = {};
     ledc_ch.channel    = LEDC_CHANNELS[idx];
@@ -131,7 +129,11 @@ static void reconfig_ledc_channel(int idx) {
     ledc_ch.intr_type  = LEDC_INTR_DISABLE;
     ledc_ch.hpoint     = 0;
     ledc_ch.timer_sel  = LEDC_TIMER;
-    ledc_channel_config(&ledc_ch);
+    
+    esp_err_t err = ledc_channel_config(&ledc_ch);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "LEDC channel %d config failed on GPIO %d: %s", idx, (int)pin, esp_err_to_name(err));
+    }
 }
 
 static void load_nvs_configuration(void) {
