@@ -70,7 +70,7 @@ static volatile bool s_seq_stop_req = false;
 static servo_step_t s_active_steps[ACTION_MAX_STEPS];
 static size_t       s_active_step_count = 0;
 
-static uint32_t calc_duty(int idx, int angle, int offset) {
+static int eff_angle(int idx, int angle, int offset) {
     int eff = angle + offset;
 
     if (idx == 3) {
@@ -80,7 +80,10 @@ static uint32_t calc_duty(int idx, int angle, int offset) {
 
     if (eff < SERVO_MIN_ANGLE) eff = SERVO_MIN_ANGLE;
     if (eff > SERVO_MAX_ANGLE) eff = SERVO_MAX_ANGLE;
+    return eff;
+}
 
+static uint32_t duty_from_eff(int eff) {
     uint32_t pulse_us = SERVO_MIN_PULSE_US + ((uint32_t)eff * (SERVO_MAX_PULSE_US - SERVO_MIN_PULSE_US)) / 180;
     if (pulse_us < 500) pulse_us = 500;
     if (pulse_us > 2500) pulse_us = 2500;
@@ -88,8 +91,61 @@ static uint32_t calc_duty(int idx, int angle, int offset) {
     return (pulse_us * LEDC_MAX_DUTY) / LEDC_PERIOD_US;
 }
 
+static uint32_t calc_duty(int idx, int angle, int offset) {
+    return duty_from_eff(eff_angle(idx, angle, offset));
+}
+
+// ---- Scissor lift (S4 / MG996R) speed limiter -------------------------------
+// Every code path (BLE s4/min/mid/max/lift, ESP-NOW, sequences) ends up in
+// apply_hardware_pwm(). For S4 that call now only sets a TARGET; a 50 Hz task
+// moves the real PWM toward it no faster than S4_MAX_DPS. This keeps the
+// MG996R from slamming to a target and pulling its full surge current.
+#define S4_MAX_DPS   15.0f   // scissor max speed, degrees/second (tune this)
+#define SLEW_TICK_MS 20
+
+static volatile int  s_s4_target = 90;     // requested effective angle
+static volatile bool s_s4_on     = false;  // PWM requested on
+static float         s_s4_out    = -1.0f;  // effective angle currently sent; <0 = unknown
+
+static void s4_write_pwm(float eff) {
+    ledc_set_duty(LEDC_MODE, LEDC_CHANNELS[3], duty_from_eff((int)lroundf(eff)));
+    ledc_update_duty(LEDC_MODE, LEDC_CHANNELS[3]);
+}
+
+static void s4_slew_task(void *pvParameters) {
+    (void)pvParameters;
+    const float max_step = S4_MAX_DPS * (SLEW_TICK_MS / 1000.0f);
+    while (1) {
+        vTaskDelay(pdMS_TO_TICKS(SLEW_TICK_MS));
+        if (!s_s4_on || s_s4_out < 0.0f) continue;
+
+        float diff = (float)s_s4_target - s_s4_out;
+        if (diff == 0.0f) continue;
+        if (diff >  max_step) diff =  max_step;
+        if (diff < -max_step) diff = -max_step;
+        s_s4_out += diff;
+        s4_write_pwm(s_s4_out);
+    }
+}
+
 static void apply_hardware_pwm(int idx, int angle, int offset, bool enable) {
     if (idx < 0 || idx >= SERVO_COUNT) return;
+
+    if (idx == 3) {
+        if (!enable) {
+            s_s4_on = false;
+            ledc_set_duty(LEDC_MODE, LEDC_CHANNELS[3], 0);
+            ledc_update_duty(LEDC_MODE, LEDC_CHANNELS[3]);
+            return;
+        }
+        s_s4_target = eff_angle(3, angle, offset);
+        if (s_s4_out < 0.0f) s_s4_out = (float)s_s4_target;  // first ever enable: position unknown
+        if (!s_s4_on) {
+            s_s4_on = true;
+            s4_write_pwm(s_s4_out);  // resume at last known output, then slew to target
+        }
+        return;
+    }
 
     uint32_t duty = enable ? calc_duty(idx, angle, offset) : 0;
     ledc_set_duty(LEDC_MODE, LEDC_CHANNELS[idx], duty);
@@ -356,14 +412,16 @@ static void auto_idle_monitor_task(void *pvParameters) {
         bool any_enabled = false;
         int64_t last_us = 0;
 
+        // S4 (scissor lift) is deliberately NOT auto-detached: it holds a load, and
+        // releasing it lets it sag, so the next attach would snap it back at full speed.
         portENTER_CRITICAL(&s_servo_mux);
-        any_enabled = s_enabled[0] || s_enabled[1] || s_enabled[2] || s_enabled[3];
+        any_enabled = s_enabled[0] || s_enabled[1] || s_enabled[2];
         last_us = s_last_activity_us;
         portEXIT_CRITICAL(&s_servo_mux);
 
         if (any_enabled && (now_us - last_us > AUTO_IDLE_TIMEOUT_US)) {
-            servo_detach_all();
-            ESP_LOGI(TAG, "Auto-idle triggered: Servos detached to protect motors & prevent rail sag.");
+            for (int i = 0; i < 3; i++) servo_detach(i);
+            ESP_LOGI(TAG, "Auto-idle triggered: S1-S3 detached (scissor lift keeps holding).");
         }
     }
 }
@@ -387,6 +445,7 @@ void servo_controller_init(void) {
     s_last_activity_us = esp_timer_get_time();
 
     xTaskCreatePinnedToCore(auto_idle_monitor_task, "auto_idle_task", 3072, NULL, 2, NULL, 1);
+    xTaskCreatePinnedToCore(s4_slew_task, "s4_slew_task", 2048, NULL, 6, NULL, 1);
     ESP_LOGI(TAG, "4-Axis Servo controller ready: S1=GP%d, S2=GP%d, S3=GP%d, S4(Scissor)=GP%d.",
              s_servo_pins[0], s_servo_pins[1], s_servo_pins[2], s_servo_pins[3]);
 }
