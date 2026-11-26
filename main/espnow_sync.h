@@ -61,6 +61,7 @@ typedef struct {
             uint8_t s1, s2, s3, s4;
             int8_t  o1, o2, o3, o4;
             uint8_t smin, smax;
+            uint8_t cmin, cmax;
             uint8_t en_mask;
             uint8_t flags;
             uint8_t active_slot;
@@ -96,6 +97,7 @@ bool espnow_sync_send_reply(const char *reply_str);
 bool espnow_sync_send_status(uint8_t s1, uint8_t s2, uint8_t s3, uint8_t s4,
                              int8_t o1, int8_t o2, int8_t o3, int8_t o4,
                              uint8_t smin, uint8_t smax,
+                             uint8_t cmin, uint8_t cmax,
                              uint8_t en_mask, uint8_t flags, uint8_t active_slot);
 
 // Transmit raw IMU line from MPU Sender to Arm Receiver
@@ -107,6 +109,9 @@ bool espnow_sync_get_cached_arm_status(int *s1, int *s2, int *s3, int *s4,
                                        int *smin, int *smax,
                                        bool *e1, bool *e2, bool *e3, bool *e4,
                                        bool *idle, bool *run, bool *loop, int *slot);
+
+// Retrieve cached claw end-stop range
+bool espnow_sync_get_cached_claw_range(int *cmin, int *cmax);
 
 void espnow_sync_register_cmd_handler(espnow_cmd_handler_t handler);
 bool espnow_sync_format_line(char *buf, size_t max_len);

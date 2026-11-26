@@ -1,3 +1,4 @@
+
 *, ::before, ::after {
   box-sizing: border-box;
   border-width: 0;
@@ -249,6 +250,9 @@ input[type=range].offset-slider::-webkit-slider-thumb {
   border: 1px solid #334155;
   cursor: pointer;
   touch-action: manipulation;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .mode-pill.active {
@@ -261,6 +265,76 @@ input[type=range].offset-slider::-webkit-slider-thumb {
   background: #f59e0b;
   color: #000000;
   border-color: #f59e0b;
+}
+
+.edit-banner {
+  background: rgba(245, 158, 11, 0.15);
+  border: 1px solid rgba(245, 158, 11, 0.55);
+  color: #fde68a;
+  border-radius: 12px;
+  padding: 8px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.renameable-name {
+  cursor: default;
+  border-radius: 6px;
+  padding: 2px 4px;
+  margin: -2px -4px;
+  transition: background 0.15s, outline 0.15s;
+}
+
+.renameable-name.edit-target-active {
+  cursor: pointer;
+  background: rgba(245, 158, 11, 0.18);
+  outline: 1px dashed #fbbf24;
+}
+
+.renameable-btn.edit-target-active {
+  outline: 2px dashed #fbbf24 !important;
+  outline-offset: 1px;
+  box-shadow: 0 0 10px rgba(245, 158, 11, 0.35);
+}
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(2, 6, 23, 0.78);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+}
+
+.modal-card {
+  width: 100%;
+  max-width: 340px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  border-color: rgba(56, 189, 248, 0.45);
+}
+
+.modal-card input[type=text] {
+  width: 100%;
+  background: #020617;
+  color: #f8fafc;
+  border: 1px solid #38bdf8;
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  outline: none;
 }
 
 .btn-card {
@@ -671,3 +745,4 @@ input[type=range].offset-slider::-webkit-slider-thumb {
   transform: translateX(-50%) translateY(0);
   opacity: 1;
 }
+

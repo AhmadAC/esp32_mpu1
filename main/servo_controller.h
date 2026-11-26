@@ -1,3 +1,4 @@
+
 #pragma once
 
 #include <stdint.h>
@@ -53,6 +54,7 @@ void servo_controller_init(void);
 
 // Angle commands
 void servo_set_angle(int idx, int angle);
+void servo_set_angle_unclamped(int idx, int angle);
 int  servo_get_angle(int idx);
 void servo_set_all(int s1, int s2, int s3, int s4);
 void servo_move_smooth(int s1, int s2, int s3, int s4, int duration_ms);
@@ -61,6 +63,12 @@ void servo_get_all_angles(int *s1, int *s2, int *s3, int *s4);
 // Dynamic Hardware Pin Mapping (Saved to NVS)
 void servo_set_pins(int p1, int p2, int p3, int p4);
 void servo_get_pins(int *p1, int *p2, int *p3, int *p4);
+
+// Claw Gripper specific range & proportional controls (Servo 1)
+void servo_set_claw_percent(int pct);
+int  servo_get_claw_percent(void);
+void servo_set_claw_range(int min_angle, int max_angle);
+void servo_get_claw_range(int *min_angle, int *max_angle);
 
 // Scissor Lift specific range & proportional controls (Servo 4)
 void servo_set_scissor_percent(int pct);

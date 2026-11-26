@@ -55,6 +55,8 @@ static portMUX_TYPE s_servo_mux = portMUX_INITIALIZER_UNLOCKED;
 static int  s_angles[SERVO_COUNT] = { 90, 90, 90, 90 };
 static int  s_offsets[SERVO_COUNT] = { 0, 0, 0, 0 };
 static bool s_enabled[SERVO_COUNT] = { false, false, false, false };
+static int  s_claw_min = 0;
+static int  s_claw_max = 180;
 static int  s_scissor_min = 0;
 static int  s_scissor_max = 180;
 static bool s_auto_idle = false;
@@ -71,12 +73,17 @@ static volatile bool s_seq_stop_req = false;
 static servo_step_t s_active_steps[ACTION_MAX_STEPS];
 static size_t       s_active_step_count = 0;
 
-static uint32_t calc_duty(int idx, int angle, int offset) {
+static uint32_t calc_duty(int idx, int angle, int offset, bool clamp_range) {
     int eff = angle + offset;
 
-    if (idx == 3) {
-        if (eff < s_scissor_min) eff = s_scissor_min;
-        if (eff > s_scissor_max) eff = s_scissor_max;
+    if (clamp_range) {
+        if (idx == 0) {
+            if (eff < s_claw_min) eff = s_claw_min;
+            if (eff > s_claw_max) eff = s_claw_max;
+        } else if (idx == 3) {
+            if (eff < s_scissor_min) eff = s_scissor_min;
+            if (eff > s_scissor_max) eff = s_scissor_max;
+        }
     }
 
     if (eff < SERVO_MIN_ANGLE) eff = SERVO_MIN_ANGLE;
@@ -89,10 +96,10 @@ static uint32_t calc_duty(int idx, int angle, int offset) {
     return (pulse_us * LEDC_MAX_DUTY) / LEDC_PERIOD_US;
 }
 
-static void apply_hardware_pwm(int idx, int angle, int offset, bool enable) {
+static void apply_hardware_pwm(int idx, int angle, int offset, bool enable, bool clamp_range) {
     if (idx < 0 || idx >= SERVO_COUNT) return;
 
-    uint32_t duty = enable ? calc_duty(idx, angle, offset) : 0;
+    uint32_t duty = enable ? calc_duty(idx, angle, offset, clamp_range) : 0;
     ledc_set_duty(LEDC_MODE, LEDC_CHANNELS[idx], duty);
     ledc_update_duty(LEDC_MODE, LEDC_CHANNELS[idx]);
 }
@@ -125,7 +132,7 @@ static void reconfig_ledc_channel(int idx) {
 
     ledc_channel_config_t ledc_ch = {};
     ledc_ch.channel    = LEDC_CHANNELS[idx];
-    ledc_ch.duty       = s_enabled[idx] ? calc_duty(idx, s_angles[idx], s_offsets[idx]) : 0;
+    ledc_ch.duty       = s_enabled[idx] ? calc_duty(idx, s_angles[idx], s_offsets[idx], true) : 0;
     ledc_ch.gpio_num   = pin;
     ledc_ch.speed_mode = LEDC_MODE;
     ledc_ch.intr_type  = LEDC_INTR_DISABLE;
@@ -137,13 +144,16 @@ static void reconfig_ledc_channel(int idx) {
 static void load_nvs_configuration(void) {
     nvs_handle_t h;
     if (nvs_open("servo_cal", NVS_READONLY, &h) == ESP_OK) {
-        int32_t o1 = 0, o2 = 0, o3 = 0, o4 = 0, idle = 0, smin = 0, smax = 180;
+        int32_t o1 = 0, o2 = 0, o3 = 0, o4 = 0, idle = 0;
+        int32_t cmin = 0, cmax = 180, smin = 0, smax = 180;
         int32_t p1 = -1, p2 = -1, p3 = -1, p4 = -1;
 
         if (nvs_get_i32(h, "off_0", &o1) == ESP_OK) s_offsets[0] = (int)o1;
         if (nvs_get_i32(h, "off_1", &o2) == ESP_OK) s_offsets[1] = (int)o2;
         if (nvs_get_i32(h, "off_2", &o3) == ESP_OK) s_offsets[2] = (int)o3;
         if (nvs_get_i32(h, "off_3", &o4) == ESP_OK) s_offsets[3] = (int)o4;
+        if (nvs_get_i32(h, "claw_min", &cmin) == ESP_OK) s_claw_min = (int)cmin;
+        if (nvs_get_i32(h, "claw_max", &cmax) == ESP_OK) s_claw_max = (int)cmax;
         if (nvs_get_i32(h, "scis_min", &smin) == ESP_OK) s_scissor_min = (int)smin;
         if (nvs_get_i32(h, "scis_max", &smax) == ESP_OK) s_scissor_max = (int)smax;
         if (nvs_get_i32(h, "auto_idle", &idle) == ESP_OK) s_auto_idle = (idle != 0);
@@ -154,6 +164,13 @@ static void load_nvs_configuration(void) {
         if (nvs_get_i32(h, "pin_3", &p4) == ESP_OK && p4 >= 0 && p4 < GPIO_NUM_MAX) s_servo_pins[3] = (gpio_num_t)p4;
 
         nvs_close(h);
+    }
+
+    if (s_claw_min < 0) s_claw_min = 0;
+    if (s_claw_max > 180) s_claw_max = 180;
+    if (s_claw_min >= s_claw_max) {
+        s_claw_min = 0;
+        s_claw_max = 180;
     }
 
     if (s_scissor_min < 0) s_scissor_min = 0;
@@ -251,10 +268,10 @@ static void interpolate_move(int target_s1, int target_s2, int target_s3, int ta
         s_angles[3] = target_s4;
         portEXIT_CRITICAL(&s_servo_mux);
 
-        apply_hardware_pwm(0, target_s1, off_s1, true);
-        apply_hardware_pwm(1, target_s2, off_s2, true);
-        apply_hardware_pwm(2, target_s3, off_s3, true);
-        apply_hardware_pwm(3, target_s4, off_s4, true);
+        apply_hardware_pwm(0, target_s1, off_s1, true, true);
+        apply_hardware_pwm(1, target_s2, off_s2, true, true);
+        apply_hardware_pwm(2, target_s3, off_s3, true, true);
+        apply_hardware_pwm(3, target_s4, off_s4, true, true);
         notify_angles();
         return;
     }
@@ -282,10 +299,10 @@ static void interpolate_move(int target_s1, int target_s2, int target_s3, int ta
         s_last_activity_us = esp_timer_get_time();
         portEXIT_CRITICAL(&s_servo_mux);
 
-        apply_hardware_pwm(0, cur_s1, off_s1, true);
-        apply_hardware_pwm(1, cur_s2, off_s2, true);
-        apply_hardware_pwm(2, cur_s3, off_s3, true);
-        apply_hardware_pwm(3, cur_s4, off_s4, true);
+        apply_hardware_pwm(0, cur_s1, off_s1, true, true);
+        apply_hardware_pwm(1, cur_s2, off_s2, true, true);
+        apply_hardware_pwm(2, cur_s3, off_s3, true, true);
+        apply_hardware_pwm(3, cur_s4, off_s4, true, true);
 
         vTaskDelay(pdMS_TO_TICKS(step_interval_ms));
     }
@@ -298,10 +315,10 @@ static void interpolate_move(int target_s1, int target_s2, int target_s3, int ta
         s_angles[3] = target_s4;
         portEXIT_CRITICAL(&s_servo_mux);
 
-        apply_hardware_pwm(0, target_s1, off_s1, true);
-        apply_hardware_pwm(1, target_s2, off_s2, true);
-        apply_hardware_pwm(2, target_s3, off_s3, true);
-        apply_hardware_pwm(3, target_s4, off_s4, true);
+        apply_hardware_pwm(0, target_s1, off_s1, true, true);
+        apply_hardware_pwm(1, target_s2, off_s2, true, true);
+        apply_hardware_pwm(2, target_s3, off_s3, true, true);
+        apply_hardware_pwm(3, target_s4, off_s4, true, true);
         notify_angles();
     }
 }
@@ -436,7 +453,23 @@ void servo_set_angle(int idx, int angle) {
     off = s_offsets[idx];
     portEXIT_CRITICAL(&s_servo_mux);
 
-    apply_hardware_pwm(idx, angle, off, true);
+    apply_hardware_pwm(idx, angle, off, true, true);
+}
+
+void servo_set_angle_unclamped(int idx, int angle) {
+    if (idx < 0 || idx >= SERVO_COUNT) return;
+    if (angle < SERVO_MIN_ANGLE) angle = SERVO_MIN_ANGLE;
+    if (angle > SERVO_MAX_ANGLE) angle = SERVO_MAX_ANGLE;
+
+    int off = 0;
+    portENTER_CRITICAL(&s_servo_mux);
+    s_angles[idx] = angle;
+    s_enabled[idx] = true;
+    s_last_activity_us = esp_timer_get_time();
+    off = s_offsets[idx];
+    portEXIT_CRITICAL(&s_servo_mux);
+
+    apply_hardware_pwm(idx, angle, off, true, false);
 }
 
 int servo_get_angle(int idx) {
@@ -459,6 +492,72 @@ void servo_set_all(int s1, int s2, int s3, int s4) {
 void servo_move_smooth(int s1, int s2, int s3, int s4, int duration_ms) {
     servo_stop_motion();
     interpolate_move(s1, s2, s3, s4, duration_ms);
+}
+
+void servo_set_claw_percent(int pct) {
+    if (pct < 0) pct = 0;
+    if (pct > 100) pct = 100;
+
+    int mn = s_claw_min;
+    int mx = s_claw_max;
+    int span = mx - mn;
+    if (span < 1) span = 1;
+    int target_angle = mn + (pct * span) / 100;
+    servo_set_angle(0, target_angle);
+}
+
+int servo_get_claw_percent(void) {
+    int cur = servo_get_angle(0);
+    int mn = s_claw_min;
+    int mx = s_claw_max;
+    int span = mx - mn;
+    if (span < 1) return 50;
+    int pct = ((cur - mn) * 100) / span;
+    if (pct < 0) pct = 0;
+    if (pct > 100) pct = 100;
+    return pct;
+}
+
+void servo_set_claw_range(int min_angle, int max_angle) {
+    if (min_angle < 0) min_angle = 0;
+    if (max_angle > 180) max_angle = 180;
+    if (min_angle >= max_angle) {
+        min_angle = 0;
+        max_angle = 180;
+    }
+
+    int cur_angle = 90;
+    int off = 0;
+    bool en = false;
+    portENTER_CRITICAL(&s_servo_mux);
+    s_claw_min = min_angle;
+    s_claw_max = max_angle;
+    if (s_angles[0] < min_angle) s_angles[0] = min_angle;
+    if (s_angles[0] > max_angle) s_angles[0] = max_angle;
+    cur_angle = s_angles[0];
+    off = s_offsets[0];
+    en = s_enabled[0];
+    portEXIT_CRITICAL(&s_servo_mux);
+
+    if (en) {
+        apply_hardware_pwm(0, cur_angle, off, true, true);
+    }
+
+    nvs_handle_t h;
+    if (nvs_open("servo_cal", NVS_READWRITE, &h) == ESP_OK) {
+        nvs_set_i32(h, "claw_min", min_angle);
+        nvs_set_i32(h, "claw_max", max_angle);
+        nvs_commit(h);
+        nvs_close(h);
+    }
+    ESP_LOGI(TAG, "Claw range saved to NVS: [%d deg, %d deg]", min_angle, max_angle);
+}
+
+void servo_get_claw_range(int *min_angle, int *max_angle) {
+    portENTER_CRITICAL(&s_servo_mux);
+    if (min_angle) *min_angle = s_claw_min;
+    if (max_angle) *max_angle = s_claw_max;
+    portEXIT_CRITICAL(&s_servo_mux);
 }
 
 void servo_set_scissor_percent(int pct) {
@@ -493,10 +592,22 @@ void servo_set_scissor_range(int min_angle, int max_angle) {
         max_angle = 180;
     }
 
+    int cur_angle = 90;
+    int off = 0;
+    bool en = false;
     portENTER_CRITICAL(&s_servo_mux);
     s_scissor_min = min_angle;
     s_scissor_max = max_angle;
+    if (s_angles[3] < min_angle) s_angles[3] = min_angle;
+    if (s_angles[3] > max_angle) s_angles[3] = max_angle;
+    cur_angle = s_angles[3];
+    off = s_offsets[3];
+    en = s_enabled[3];
     portEXIT_CRITICAL(&s_servo_mux);
+
+    if (en) {
+        apply_hardware_pwm(3, cur_angle, off, true, true);
+    }
 
     nvs_handle_t h;
     if (nvs_open("servo_cal", NVS_READWRITE, &h) == ESP_OK) {
@@ -530,7 +641,7 @@ void servo_detach(int idx) {
     s_enabled[idx] = false;
     portEXIT_CRITICAL(&s_servo_mux);
 
-    apply_hardware_pwm(idx, s_angles[idx], s_offsets[idx], false);
+    apply_hardware_pwm(idx, s_angles[idx], s_offsets[idx], false, true);
     notify_enable_states();
 }
 
@@ -543,7 +654,7 @@ void servo_detach_all(void) {
     portEXIT_CRITICAL(&s_servo_mux);
 
     for (int i = 0; i < SERVO_COUNT; i++) {
-        apply_hardware_pwm(i, s_angles[i], s_offsets[i], false);
+        apply_hardware_pwm(i, s_angles[i], s_offsets[i], false, true);
     }
     notify_enable_states();
 }
@@ -555,7 +666,7 @@ void servo_attach(int idx) {
     s_last_activity_us = esp_timer_get_time();
     portEXIT_CRITICAL(&s_servo_mux);
 
-    apply_hardware_pwm(idx, s_angles[idx], s_offsets[idx], true);
+    apply_hardware_pwm(idx, s_angles[idx], s_offsets[idx], true, true);
     notify_enable_states();
 }
 
@@ -568,7 +679,7 @@ void servo_attach_all(void) {
     portEXIT_CRITICAL(&s_servo_mux);
 
     for (int i = 0; i < SERVO_COUNT; i++) {
-        apply_hardware_pwm(i, s_angles[i], s_offsets[i], true);
+        apply_hardware_pwm(i, s_angles[i], s_offsets[i], true, true);
     }
     notify_enable_states();
 }
@@ -604,7 +715,7 @@ void servo_set_offset(int idx, int offset) {
     en = s_enabled[idx];
     portEXIT_CRITICAL(&s_servo_mux);
 
-    apply_hardware_pwm(idx, angle, offset, en);
+    apply_hardware_pwm(idx, angle, offset, en, true);
 }
 
 void servo_save_offsets(int o1, int o2, int o3, int o4) {

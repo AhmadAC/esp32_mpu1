@@ -17,6 +17,24 @@
     <span id="toast-message">Notification</span>
   </div>
 
+  <!-- In-DOM Rename Modal (Only accessible when Edit mode is active) -->
+  <div id="rename-modal" class="modal-overlay" style="display:none;" onclick="if(event.target===this) closeRenameModal()">
+    <div class="glass-panel modal-card">
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <span id="rename-modal-title" style="font-size:13px; font-weight:700; color:#38bdf8;">Rename Item</span>
+        <button type="button" onclick="closeRenameModal()" style="background:none; border:none; color:rgba(255,255,255,0.6); cursor:pointer; padding:4px; display:flex; align-items:center;">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>
+      </div>
+      <input type="text" id="rename-modal-input" maxlength="28" placeholder="Enter new name..." onkeydown="if(event.key==='Enter') confirmRenameModal()">
+      <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:6px;">
+        <button type="button" id="rename-modal-reset" class="touch-btn" onclick="resetCurrentRenameItem()" style="background:#334155; min-height:38px;">Default</button>
+        <button type="button" id="rename-modal-cancel" class="touch-btn" onclick="closeRenameModal()" style="background:#1e293b; min-height:38px;">Cancel</button>
+        <button type="button" id="rename-modal-save" class="touch-btn" onclick="confirmRenameModal()" style="background:#0284c7; color:white; min-height:38px;">Save</button>
+      </div>
+    </div>
+  </div>
+
   <header style="padding-bottom:8px; border-bottom:1px solid rgba(255,255,255,0.1); display:flex; align-items:center; justify-content:space-between; flex-shrink:0;">
     <div>
       <h1 style="font-size:1.05rem; font-weight:700; letter-spacing:-0.02em;">Arm &amp; Scissor Mission Control</h1>
@@ -44,6 +62,18 @@
   </div>
 
   <main style="flex:1; min-height:0; overflow-y:auto; display:flex; flex-direction:column; gap:12px; padding-right:2px; touch-action:pan-y;" class="no-scrollbar">
+
+    <!-- Edit Mode Banner -->
+    <div id="edit-mode-banner" class="edit-banner" style="display:none;">
+      <div style="display:flex; align-items:center; gap:6px;">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+          <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+        </svg>
+        <span>Edit Mode Active: Tap any highlighted servo name or preset button to rename it.</span>
+      </div>
+      <button type="button" onclick="toggleEditNamesMode()" style="background:#f59e0b; color:#000000; border:none; border-radius:6px; padding:4px 10px; font-size:10px; font-weight:800; cursor:pointer;">Done</button>
+    </div>
 
     <!-- ESP-NOW Wireless Mesh Status -->
     <div class="glass-panel panel espnow-panel">
@@ -92,21 +122,21 @@
       </div>
 
       <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
-        <button type="button" class="touch-btn" onclick="homeAllServos()" style="background:#0284c7; flex-direction:row;">
+        <button id="quick-home-btn" type="button" class="touch-btn renameable-btn" onclick="onQuickButtonClick('home', homeAllServos)" style="background:#0284c7; flex-direction:row;">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path></svg>
-          <span>Home All (90°)</span>
+          <span id="quick-home-lbl">Home All (90°)</span>
         </button>
-        <button type="button" class="touch-btn" onclick="detachAllServos()" style="background:#f59e0b; color:#000000; border-color:#f59e0b; flex-direction:row;">
+        <button id="quick-detach-btn" type="button" class="touch-btn renameable-btn" onclick="onQuickButtonClick('detach', detachAllServos)" style="background:#f59e0b; color:#000000; border-color:#f59e0b; flex-direction:row;">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"></path><line x1="12" y1="2" x2="12" y2="12"></line></svg>
-          <span>Detach (Idle)</span>
+          <span id="quick-detach-lbl">Detach (Idle)</span>
         </button>
-        <button type="button" class="touch-btn" onclick="requestStatusSync()" style="background:#1e293b; flex-direction:row;">
+        <button id="quick-sync-btn" type="button" class="touch-btn renameable-btn" onclick="onQuickButtonClick('sync', requestStatusSync)" style="background:#1e293b; flex-direction:row;">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
-          <span>Sync State</span>
+          <span id="quick-sync-lbl">Sync State</span>
         </button>
-        <button type="button" class="touch-btn" onclick="stopAllMotion()" style="background:#ef4444; flex-direction:row;">
+        <button id="quick-stop-btn" type="button" class="touch-btn renameable-btn" onclick="onQuickButtonClick('stop', stopAllMotion)" style="background:#ef4444; flex-direction:row;">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="2"></rect></svg>
-          <span>STOP Motion</span>
+          <span id="quick-stop-lbl">STOP Motion</span>
         </button>
       </div>
     </div>
@@ -118,9 +148,10 @@
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
             <polyline points="7 11 12 6 17 11"></polyline><polyline points="7 17 12 12 17 17"></polyline>
           </svg>
-          Scissor Lift (MG996R)
+          <span id="s4-header" class="renameable-name" onclick="onServoNameClick(3)">Scissor Lift (MG996R)</span>
         </span>
         <div style="display:flex; gap:6px; align-items:center;">
+          <button id="edit-names-btn-scis" type="button" onclick="toggleEditNamesMode()" class="mode-pill edit-pill-btn">Edit</button>
           <span id="s4-state-badge" class="pin-badge" style="background:rgba(148,163,184,0.15); color:#94a3b8; border-color:rgba(148,163,184,0.3);">IDLE</span>
           <span id="saved-range-badge" class="chip chip-ok">Range: 0° – 180°</span>
         </div>
@@ -147,15 +178,15 @@
 
       <!-- Quick Preset Buttons -->
       <div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:8px;">
-        <button type="button" class="touch-btn" onclick="moveToSavedMin()" style="background:#0369a1; flex-direction:row;">
+        <button id="scissor-btn-min" type="button" class="touch-btn renameable-btn" onclick="onQuickButtonClick('scissorMin', moveToSavedMin)" style="background:#0369a1; flex-direction:row;">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="7 13 12 18 17 13"></polyline><line x1="5" y1="21" x2="19" y2="21"></line></svg>
           <span id="quick-min-lbl">Min (0°)</span>
         </button>
-        <button type="button" class="touch-btn" onclick="moveToSavedMid()" style="background:#0284c7; flex-direction:row;">
+        <button id="scissor-btn-mid" type="button" class="touch-btn renameable-btn" onclick="onQuickButtonClick('scissorMid', moveToSavedMid)" style="background:#0284c7; flex-direction:row;">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path></svg>
           <span id="quick-mid-lbl">Mid (90°)</span>
         </button>
-        <button type="button" class="touch-btn" onclick="moveToSavedMax()" style="background:#0369a1; flex-direction:row;">
+        <button id="scissor-btn-max" type="button" class="touch-btn renameable-btn" onclick="onQuickButtonClick('scissorMax', moveToSavedMax)" style="background:#0369a1; flex-direction:row;">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 11 12 6 7 11"></polyline><line x1="5" y1="3" x2="19" y2="3"></line></svg>
           <span id="quick-max-lbl">Max (180°)</span>
         </button>
@@ -221,7 +252,7 @@
       </div>
     </div>
 
-    <!-- 3 Arm Joint Sliders (S1 Claw, S2 Arm, S3 Shoulder) -->
+    <!-- 3 Arm Joint Sliders (S1 Claw + Both-Sides Trim, S2 Arm, S3 Shoulder) -->
     <div class="glass-panel panel" style="border-color:rgba(56,189,248,0.4);">
       <div class="panel-head">
         <span class="panel-title">
@@ -234,22 +265,26 @@
           </svg>
           Remote Arm Joints
         </span>
-        <div style="display:flex; align-items:center; gap:6px;">
+        <div style="display:flex; align-items:center; gap:5px; flex-wrap:wrap;">
+          <button id="edit-names-btn" type="button" onclick="toggleEditNamesMode()" class="mode-pill edit-pill-btn">Edit</button>
           <button id="auto-idle-btn" type="button" onclick="toggleAutoIdle()" class="mode-pill">Auto-Idle: OFF</button>
           <button id="offset-mode-btn" type="button" onclick="toggleOffsetMode()" class="mode-pill" style="color:#f59e0b; border-color:#f59e0b;">Trim: OFF</button>
           <button type="button" onclick="requestCalibrationSync()" style="background:none; border:none; color:#38bdf8; font-size:10px; font-weight:700; cursor:pointer;">Fetch</button>
         </div>
       </div>
 
-      <!-- Servo 1 (Claw) -->
+      <!-- Servo 1 (Claw) + Both-Sides End-Stop Trimming -->
       <div class="servo-card">
-        <div style="display:flex; justify-content:space-between; align-items:center; font-size:11px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; font-size:11px; gap:6px; flex-wrap:wrap;">
           <div style="display:flex; align-items:center; gap:6px;">
-            <span id="s1-header" onclick="editServoName(0)" style="cursor:pointer; font-weight:700;">Servo 1 — Claw: <span id="s1-val" style="color:#38bdf8; font-family:monospace; font-weight:700;">90°</span></span>
+            <span id="s1-header" class="renameable-name" onclick="onServoNameClick(0)" style="font-weight:700;">Servo 1 — Claw: <span id="s1-val" style="color:#38bdf8; font-family:monospace; font-weight:700;">90°</span></span>
             <span id="s1-pin-label" class="pin-badge">GP1</span>
             <span id="s1-state-badge" class="pin-badge" style="background:rgba(148,163,184,0.15); color:#94a3b8; border-color:rgba(148,163,184,0.3);">IDLE</span>
           </div>
-          <span style="font-size:10px; color:rgba(255,255,255,0.5);">Trim: <span id="o1-val" style="color:#f59e0b; font-family:monospace; font-weight:700;">0°</span></span>
+          <div style="display:flex; align-items:center; gap:6px;">
+            <span id="claw-range-badge" class="chip chip-ok" style="padding:2px 7px; font-size:9px;">Range: 0° – 180°</span>
+            <span style="font-size:10px; color:rgba(255,255,255,0.5);">Trim: <span id="o1-val" style="color:#f59e0b; font-family:monospace; font-weight:700;">0°</span></span>
+          </div>
         </div>
         <input type="range" id="s1-slider" min="0" max="180" value="90"
                onpointerdown="onSliderStart(0)" ontouchstart="onSliderStart(0)"
@@ -262,13 +297,88 @@
           <button type="button" class="trim-btn" id="s1-btn-c" onclick="servoStepAction(0, 1, -5)">+1°</button>
           <button type="button" class="trim-btn" id="s1-btn-d" onclick="servoStepAction(0, 10, 5)">+10°</button>
         </div>
+
+        <!-- Claw Quick Presets -->
+        <div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:6px; margin-top:2px;">
+          <button id="claw-btn-min" type="button" class="touch-btn renameable-btn" onclick="onQuickButtonClick('clawMin', moveClawToMin)" style="background:#0369a1; flex-direction:row; min-height:36px; padding:6px 8px; font-size:10.5px;">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 14 10 14 10 20"></polyline><polyline points="20 10 14 10 14 4"></polyline><line x1="14" y1="10" x2="21" y2="3"></line><line x1="3" y1="21" x2="10" y2="14"></line></svg>
+            <span id="claw-quick-min-lbl">Close (0°)</span>
+          </button>
+          <button id="claw-btn-mid" type="button" class="touch-btn renameable-btn" onclick="onQuickButtonClick('clawMid', moveClawToMid)" style="background:#0284c7; flex-direction:row; min-height:36px; padding:6px 8px; font-size:10.5px;">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"></circle></svg>
+            <span id="claw-quick-mid-lbl">Mid (90°)</span>
+          </button>
+          <button id="claw-btn-max" type="button" class="touch-btn renameable-btn" onclick="onQuickButtonClick('clawMax', moveClawToMax)" style="background:#0369a1; flex-direction:row; min-height:36px; padding:6px 8px; font-size:10.5px;">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"></polyline><polyline points="9 21 3 21 3 15"></polyline><line x1="21" y1="3" x2="14" y2="10"></line><line x1="3" y1="21" x2="10" y2="14"></line></svg>
+            <span id="claw-quick-max-lbl">Open (180°)</span>
+          </button>
+        </div>
+
+        <!-- Claw End-Stop Trimming (Both Sides) -->
+        <div style="border-top:1px solid rgba(255,255,255,0.08); padding-top:8px; margin-top:4px; display:flex; flex-direction:column; gap:8px;">
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <span style="font-size:10px; font-weight:700; color:#38bdf8; text-transform:uppercase;">Claw End-Stop Trimming (Both Sides)</span>
+            <span id="claw-trim-sync-badge" class="chip chip-ok">Saved</span>
+          </div>
+
+          <div class="servo-card trim-end-card">
+            <div style="display:flex; justify-content:space-between; align-items:center; font-size:11px; margin-bottom:4px;">
+              <span style="font-weight:700; color:#fbbf24;">Closed Side (Min): <span id="claw-min-trim-val" style="font-family:monospace; color:#ffffff;">0°</span></span>
+              <button type="button" onclick="testClawTrimEnd('min')" style="background:#334155; color:#7dd3fc; border:1px solid #475569; border-radius:6px; padding:3px 8px; font-size:10px; font-weight:700; cursor:pointer;">Test Close</button>
+            </div>
+            <input type="range" id="claw-min-trim-slider" class="offset-slider" min="0" max="179" value="0"
+                   oninput="onClawMinTrimSlider(this.value)"
+                   onpointerup="setClawMinTrimAngle(parseInt(this.value, 10), false)"
+                   ontouchend="setClawMinTrimAngle(parseInt(this.value, 10), false)">
+            <div class="servo-btn-row">
+              <button type="button" class="trim-btn" onclick="nudgeClawMinTrim(-10)">-10°</button>
+              <button type="button" class="trim-btn" onclick="nudgeClawMinTrim(-1)">-1°</button>
+              <button type="button" class="trim-btn" onclick="nudgeClawMinTrim(1)">+1°</button>
+              <button type="button" class="trim-btn" onclick="nudgeClawMinTrim(10)">+10°</button>
+            </div>
+          </div>
+
+          <div class="servo-card trim-end-card">
+            <div style="display:flex; justify-content:space-between; align-items:center; font-size:11px; margin-bottom:4px;">
+              <span style="font-weight:700; color:#fbbf24;">Open Side (Max): <span id="claw-max-trim-val" style="font-family:monospace; color:#ffffff;">180°</span></span>
+              <button type="button" onclick="testClawTrimEnd('max')" style="background:#334155; color:#7dd3fc; border:1px solid #475569; border-radius:6px; padding:3px 8px; font-size:10px; font-weight:700; cursor:pointer;">Test Open</button>
+            </div>
+            <input type="range" id="claw-max-trim-slider" class="offset-slider" min="1" max="180" value="180"
+                   oninput="onClawMaxTrimSlider(this.value)"
+                   onpointerup="setClawMaxTrimAngle(parseInt(this.value, 10), false)"
+                   ontouchend="setClawMaxTrimAngle(parseInt(this.value, 10), false)">
+            <div class="servo-btn-row">
+              <button type="button" class="trim-btn" onclick="nudgeClawMaxTrim(-10)">-10°</button>
+              <button type="button" class="trim-btn" onclick="nudgeClawMaxTrim(-1)">-1°</button>
+              <button type="button" class="trim-btn" onclick="nudgeClawMaxTrim(1)">+1°</button>
+              <button type="button" class="trim-btn" onclick="nudgeClawMaxTrim(10)">+10°</button>
+            </div>
+          </div>
+
+          <div style="display:grid; grid-template-columns:1.3fr 1fr; gap:6px;">
+            <button id="save-claw-range-btn" type="button" class="touch-btn" onclick="saveClawRange()" style="background:#10b981; color:white; flex-direction:row;">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
+                <polyline points="17 21 17 13 7 13 7 21"></polyline>
+              </svg>
+              <span id="save-claw-range-text">Save Claw Trim</span>
+            </button>
+            <button type="button" class="touch-btn" onclick="resetClawRange()" style="background:#475569; color:white; flex-direction:row;">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="1 4 1 10 7 10"></polyline>
+                <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path>
+              </svg>
+              <span>Reset 0°–180°</span>
+            </button>
+          </div>
+        </div>
       </div>
 
       <!-- Servo 2 (Arm) -->
       <div class="servo-card">
         <div style="display:flex; justify-content:space-between; align-items:center; font-size:11px;">
           <div style="display:flex; align-items:center; gap:6px;">
-            <span id="s2-header" onclick="editServoName(1)" style="cursor:pointer; font-weight:700;">Servo 2 — Arm: <span id="s2-val" style="color:#38bdf8; font-family:monospace; font-weight:700;">90°</span></span>
+            <span id="s2-header" class="renameable-name" onclick="onServoNameClick(1)" style="font-weight:700;">Servo 2 — Arm: <span id="s2-val" style="color:#38bdf8; font-family:monospace; font-weight:700;">90°</span></span>
             <span id="s2-pin-label" class="pin-badge">GP38</span>
             <span id="s2-state-badge" class="pin-badge" style="background:rgba(148,163,184,0.15); color:#94a3b8; border-color:rgba(148,163,184,0.3);">IDLE</span>
           </div>
@@ -291,7 +401,7 @@
       <div class="servo-card">
         <div style="display:flex; justify-content:space-between; align-items:center; font-size:11px;">
           <div style="display:flex; align-items:center; gap:6px;">
-            <span id="s3-header" onclick="editServoName(2)" style="cursor:pointer; font-weight:700;">Servo 3 — Shoulder: <span id="s3-val" style="color:#38bdf8; font-family:monospace; font-weight:700;">90°</span></span>
+            <span id="s3-header" class="renameable-name" onclick="onServoNameClick(2)" style="font-weight:700;">Servo 3 — Shoulder: <span id="s3-val" style="color:#38bdf8; font-family:monospace; font-weight:700;">90°</span></span>
             <span id="s3-pin-label" class="pin-badge">GP39</span>
             <span id="s3-state-badge" class="pin-badge" style="background:rgba(148,163,184,0.15); color:#94a3b8; border-color:rgba(148,163,184,0.3);">IDLE</span>
           </div>
@@ -576,7 +686,7 @@
 
   <footer style="margin-top:8px; flex-shrink:0;">
     <form onsubmit="handleSendCustom(event)" style="display:flex; gap:8px;">
-      <input type="text" id="cmd-input" placeholder="Command (e.g. s1 90, lift 75, pins 1 38 39 12, mpu_ctrl on)..." style="flex:1; background:rgba(255,255,255,0.1); border:1px solid rgba(255,255,255,0.15); border-radius:12px; padding:8px 12px; font-size:12px; color:white; outline:none;">
+      <input type="text" id="cmd-input" placeholder="Command (e.g. s1 90, lift 75, claw_range_set 20 150, mpu_ctrl on)..." style="flex:1; background:rgba(255,255,255,0.1); border:1px solid rgba(255,255,255,0.15); border-radius:12px; padding:8px 12px; font-size:12px; color:white; outline:none;">
       <button type="submit" class="touch-btn" style="min-height:unset; height:38px; padding:0 16px; border-radius:12px; background:#0284c7; color:white; font-size:12px; font-weight:700; border:none; cursor:pointer; flex-direction:row; gap:6px;">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
         <span>Send</span>
@@ -592,3 +702,4 @@
   <script src="app.js"></script>
 </body>
 </html>
+

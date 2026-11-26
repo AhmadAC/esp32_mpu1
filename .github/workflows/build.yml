@@ -2,9 +2,9 @@ name: Build YD-ESP32-S3 Dual Firmware (ESP-NOW Arm & MPU)
 
 on:
   push:
-    branches: [ "Speaker", "main", "master" ]
+    branches: [ working ]
   pull_request:
-    branches: [ "Speaker", "main", "master" ]
+    branches: [ working ]
   workflow_dispatch:
 
 jobs:

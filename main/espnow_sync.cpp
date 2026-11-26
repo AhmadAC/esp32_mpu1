@@ -43,6 +43,7 @@ static QueueHandle_t s_espnow_rx_queue = NULL;
 static int  s_cached_s1 = 90, s_cached_s2 = 90, s_cached_s3 = 90, s_cached_s4 = 90;
 static int  s_cached_o1 = 0,  s_cached_o2 = 0,  s_cached_o3 = 0,  s_cached_o4 = 0;
 static int  s_cached_smin = 0, s_cached_smax = 180;
+static int  s_cached_cmin = 0, s_cached_cmax = 180;
 static bool s_cached_e1 = false, s_cached_e2 = false, s_cached_e3 = false, s_cached_e4 = false;
 static bool s_cached_idle = false, s_cached_run = false, s_cached_loop = false;
 static int  s_cached_slot = 0;
@@ -200,6 +201,13 @@ static void process_incoming_packet(const espnow_rx_item_t *item) {
             s_cached_o4 = pkt->payload.status.o4;
             s_cached_smin = pkt->payload.status.smin;
             s_cached_smax = pkt->payload.status.smax;
+            if (pkt->payload.status.cmax > pkt->payload.status.cmin && pkt->payload.status.cmax <= 180) {
+                s_cached_cmin = pkt->payload.status.cmin;
+                s_cached_cmax = pkt->payload.status.cmax;
+            } else {
+                s_cached_cmin = 0;
+                s_cached_cmax = 180;
+            }
             s_cached_e1 = (pkt->payload.status.en_mask & 1) != 0;
             s_cached_e2 = (pkt->payload.status.en_mask & 2) != 0;
             s_cached_e3 = (pkt->payload.status.en_mask & 4) != 0;
@@ -211,12 +219,13 @@ static void process_incoming_packet(const espnow_rx_item_t *item) {
             s_has_cached_status = true;
             portEXIT_CRITICAL(&s_mux);
 
-            char status_line[216];
+            char status_line[256];
             snprintf(status_line, sizeof(status_line),
-                     "STATUS:s1=%d,s2=%d,s3=%d,s4=%d,o1=%d,o2=%d,o3=%d,o4=%d,min=%d,max=%d,en1=%d,en2=%d,en3=%d,en4=%d,idle=%d,run=%d,act=%d,loop=%d,bo=0,mpuc=%d,mpuok=1\n",
+                     "STATUS:s1=%d,s2=%d,s3=%d,s4=%d,o1=%d,o2=%d,o3=%d,o4=%d,min=%d,max=%d,cmin=%d,cmax=%d,en1=%d,en2=%d,en3=%d,en4=%d,idle=%d,run=%d,act=%d,loop=%d,bo=0,mpuc=%d,mpuok=1\n",
                      s_cached_s1, s_cached_s2, s_cached_s3, s_cached_s4,
                      s_cached_o1, s_cached_o2, s_cached_o3, s_cached_o4,
                      s_cached_smin, s_cached_smax,
+                     s_cached_cmin, s_cached_cmax,
                      s_cached_e1 ? 1 : 0, s_cached_e2 ? 1 : 0,
                      s_cached_e3 ? 1 : 0, s_cached_e4 ? 1 : 0,
                      s_cached_idle ? 1 : 0, s_cached_run ? 1 : 0,
@@ -303,12 +312,14 @@ static void espnow_sync_task(void *pvParameters) {
                     int s1 = 90, s2 = 90, s3 = 90, s4 = 90;
                     int o1 = 0,  o2 = 0,  o3 = 0,  o4 = 0;
                     int smin = 0, smax = 180;
+                    int cmin = 0, cmax = 180;
                     bool e1 = false, e2 = false, e3 = false, e4 = false;
 
                     servo_get_all_angles(&s1, &s2, &s3, &s4);
                     servo_get_all_offsets(&o1, &o2, &o3, &o4);
                     servo_get_all_enabled(&e1, &e2, &e3, &e4);
                     servo_get_scissor_range(&smin, &smax);
+                    servo_get_claw_range(&cmin, &cmax);
 
                     uint8_t en_mask = (e1 ? 1 : 0) | (e2 ? 2 : 0) | (e3 ? 4 : 0) | (e4 ? 8 : 0);
                     uint8_t flags = (servo_get_auto_idle() ? 1 : 0) |
@@ -319,6 +330,7 @@ static void espnow_sync_task(void *pvParameters) {
                     espnow_sync_send_status((uint8_t)s1, (uint8_t)s2, (uint8_t)s3, (uint8_t)s4,
                                             (int8_t)o1, (int8_t)o2, (int8_t)o3, (int8_t)o4,
                                             (uint8_t)smin, (uint8_t)smax,
+                                            (uint8_t)cmin, (uint8_t)cmax,
                                             en_mask, flags, slot);
                 } else {
                     espnow_packet_t hb = {};
@@ -449,6 +461,7 @@ bool espnow_sync_send_reply(const char *reply_str) {
 bool espnow_sync_send_status(uint8_t s1, uint8_t s2, uint8_t s3, uint8_t s4,
                              int8_t o1, int8_t o2, int8_t o3, int8_t o4,
                              uint8_t smin, uint8_t smax,
+                             uint8_t cmin, uint8_t cmax,
                              uint8_t en_mask, uint8_t flags, uint8_t active_slot) {
     if (!s_is_paired) return false;
 
@@ -464,6 +477,8 @@ bool espnow_sync_send_status(uint8_t s1, uint8_t s2, uint8_t s3, uint8_t s4,
     pkt.payload.status.o4 = o4;
     pkt.payload.status.smin = smin;
     pkt.payload.status.smax = smax;
+    pkt.payload.status.cmin = cmin;
+    pkt.payload.status.cmax = cmax;
     pkt.payload.status.en_mask = en_mask;
     pkt.payload.status.flags = flags;
     pkt.payload.status.active_slot = active_slot;
@@ -508,6 +523,21 @@ bool espnow_sync_get_cached_arm_status(int *s1, int *s2, int *s3, int *s4,
     if (run)  *run  = s_cached_run;
     if (loop) *loop = s_cached_loop;
     if (slot) *slot = s_cached_slot;
+    portEXIT_CRITICAL(&s_mux);
+
+    return true;
+}
+
+bool espnow_sync_get_cached_claw_range(int *cmin, int *cmax) {
+    if (!s_has_cached_status) {
+        if (cmin) *cmin = 0;
+        if (cmax) *cmax = 180;
+        return false;
+    }
+
+    portENTER_CRITICAL(&s_mux);
+    if (cmin) *cmin = s_cached_cmin;
+    if (cmax) *cmax = s_cached_cmax;
     portEXIT_CRITICAL(&s_mux);
 
     return true;

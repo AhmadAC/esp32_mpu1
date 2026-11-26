@@ -18,9 +18,6 @@
 
 static const char *TAG = "CMD_PROC";
 
-#define CLAW_CLOSED_ANGLE  0
-#define CLAW_OPEN_ANGLE    130
-
 static int parse_servo_index(const char *token) {
     if (!token) return -1;
     if (strcmp(token, "1") == 0 || strcasecmp(token, "s1") == 0 || strcasecmp(token, "claw") == 0) return 0;
@@ -36,9 +33,10 @@ static bool parse_bool_arg(const char *s) {
 }
 
 // Releases MPU tracking ONLY when manual arm commands (S1, S2, S3) are received.
-// Manual scissor movement (S4 / lift) does NOT stop MPU arm tracking.
+// Manual scissor movement (S4 / lift) and range queries do NOT stop MPU arm tracking.
 static bool is_arm_motion_override(const char *cmd) {
     if (!cmd) return false;
+    if (strcmp(cmd, "claw_range_get") == 0 || strncmp(cmd, "claw_range_set", 14) == 0) return false;
     if ((cmd[0] == 's' || cmd[0] == 'S') && (cmd[1] >= '1' && cmd[1] <= '3')) return true;
     if (strncmp(cmd, "move", 4) == 0) return true;
     if (strncmp(cmd, "set", 3) == 0) return true;
@@ -68,6 +66,7 @@ size_t command_build_status(char *buf, size_t len) {
     int s1 = 90, s2 = 90, s3 = 90, s4 = 90;
     int o1 = 0, o2 = 0, o3 = 0, o4 = 0;
     int smin = 0, smax = 180;
+    int cmin = 0, cmax = 180;
     bool e1 = false, e2 = false, e3 = false, e4 = false;
     bool auto_idle = false;
     bool is_running = false;
@@ -79,6 +78,7 @@ size_t command_build_status(char *buf, size_t len) {
     servo_get_all_offsets(&o1, &o2, &o3, &o4);
     servo_get_all_enabled(&e1, &e2, &e3, &e4);
     servo_get_scissor_range(&smin, &smax);
+    servo_get_claw_range(&cmin, &cmax);
     auto_idle = servo_get_auto_idle();
     is_running = servo_is_sequence_running();
     is_looping = servo_is_sequence_looping();
@@ -87,13 +87,14 @@ size_t command_build_status(char *buf, size_t len) {
     espnow_sync_get_cached_arm_status(&s1, &s2, &s3, &s4, &o1, &o2, &o3, &o4,
                                       &smin, &smax, &e1, &e2, &e3, &e4,
                                       &auto_idle, &is_running, &is_looping, &active_slot);
+    espnow_sync_get_cached_claw_range(&cmin, &cmax);
 #endif
 
     int brownout = (esp_reset_reason() == ESP_RST_BROWNOUT) ? 1 : 0;
 
     int n = snprintf(buf, len,
-                     "STATUS:s1=%d,s2=%d,s3=%d,s4=%d,o1=%d,o2=%d,o3=%d,o4=%d,min=%d,max=%d,en1=%d,en2=%d,en3=%d,en4=%d,idle=%d,run=%d,act=%d,loop=%d,bo=%d,mpuc=%d,mpuok=%d\n",
-                     s1, s2, s3, s4, o1, o2, o3, o4, smin, smax,
+                     "STATUS:s1=%d,s2=%d,s3=%d,s4=%d,o1=%d,o2=%d,o3=%d,o4=%d,min=%d,max=%d,cmin=%d,cmax=%d,en1=%d,en2=%d,en3=%d,en4=%d,idle=%d,run=%d,act=%d,loop=%d,bo=%d,mpuc=%d,mpuok=%d\n",
+                     s1, s2, s3, s4, o1, o2, o3, o4, smin, smax, cmin, cmax,
                      e1 ? 1 : 0, e2 ? 1 : 0, e3 ? 1 : 0, e4 ? 1 : 0,
                      auto_idle ? 1 : 0,
                      is_running ? 1 : 0,
@@ -154,7 +155,9 @@ void command_process(const char *cmd_line, command_print_fn_t print_fn) {
                  "  mpu_read / mpu_get                   : Telemetry / state readout\n"
                  "  mpu_cal <gyro|accel|neutral|yaw|clear>: Calibrate MPU\n"
                  "  mpu_ctrl <on|off>                    : Wireless MPU-to-Arm tracking\n"
-                 "  claw <0-180|open|close>              : Claw gripper (S1)\n"
+                 "  claw <0-180|open|close|mid>          : Claw gripper (S1)\n"
+                 "  claw_range_set <min> <max>           : Claw both-sides end-stop trim\n"
+                 "  claw_range_get / claw_test <deg>     : Query or test claw end-stops\n"
                  "  arm <0-180> / shoulder <0-180>       : Joint angles (S2, S3)\n"
                  "  scissor <0-180> / s4 <0-180>         : Scissor lift angle (S4)\n"
                  "  lift <0-100>                         : Proportional lift height percentage\n"
@@ -177,7 +180,6 @@ void command_process(const char *cmd_line, command_print_fn_t print_fn) {
     bool is_mpu_cmd = (strncmp(p, "mpu", 3) == 0);
     if (is_mpu_cmd) {
 #if NODE_IS_RECEIVER
-        // Forward MPU commands to MPU Sender if this node lacks the sensor
         if (!imu_has_sensor() && espnow_sync_is_paired()) {
             espnow_sync_send_cmd(p);
             return;
@@ -301,20 +303,87 @@ void command_process(const char *cmd_line, command_print_fn_t print_fn) {
         return;
     }
 
+    if (strncmp(p, "claw_range_set ", 15) == 0) {
+        int mn = 0, mx = 180;
+        if (sscanf(p + 15, "%d %d", &mn, &mx) == 2) {
+            servo_set_claw_range(mn, mx);
+            servo_get_claw_range(&mn, &mx);
+            char msg[48];
+            snprintf(msg, sizeof(msg), "CLAW_RANGE:%d,%d\n", mn, mx);
+            print_fn(msg);
+            command_notify_status();
+            return;
+        }
+    }
+
+    if (strcmp(p, "claw_range_get") == 0) {
+        int mn = 0, mx = 180;
+        servo_get_claw_range(&mn, &mx);
+        char msg[48];
+        snprintf(msg, sizeof(msg), "CLAW_RANGE:%d,%d\n", mn, mx);
+        print_fn(msg);
+        return;
+    }
+
+    if (strncmp(p, "claw_test ", 10) == 0) {
+        int angle = atoi(p + 10);
+        if (angle >= SERVO_MIN_ANGLE && angle <= SERVO_MAX_ANGLE) {
+            servo_set_angle_unclamped(0, angle);
+            char msg[64];
+            snprintf(msg, sizeof(msg), "ANG:%d,%d,%d,%d\n", angle, servo_get_angle(1), servo_get_angle(2), servo_get_angle(3));
+            print_fn(msg);
+            return;
+        }
+    }
+
+    if (strncmp(p, "scissor_test ", 13) == 0) {
+        int angle = atoi(p + 13);
+        if (angle >= SERVO_MIN_ANGLE && angle <= SERVO_MAX_ANGLE) {
+            servo_set_angle_unclamped(3, angle);
+            char msg[64];
+            snprintf(msg, sizeof(msg), "ANG:%d,%d,%d,%d\n", servo_get_angle(0), servo_get_angle(1), servo_get_angle(2), angle);
+            print_fn(msg);
+            return;
+        }
+    }
+
+    if (strncmp(p, "claw_pct ", 9) == 0) {
+        int pct = atoi(p + 9);
+        servo_set_claw_percent(pct);
+        char msg[64];
+        snprintf(msg, sizeof(msg), "ANG:%d,%d,%d,%d\n", servo_get_angle(0), servo_get_angle(1), servo_get_angle(2), servo_get_angle(3));
+        print_fn(msg);
+        return;
+    }
+
+    if (strcmp(p, "claw_min") == 0 || strcmp(p, "claw_max") == 0 || strcmp(p, "claw_mid") == 0) {
+        int cmin = 0, cmax = 180;
+        servo_get_claw_range(&cmin, &cmax);
+        int target = (strcmp(p, "claw_min") == 0) ? cmin : (strcmp(p, "claw_max") == 0 ? cmax : (cmin + cmax) / 2);
+        servo_set_angle(0, target);
+        char msg[64];
+        snprintf(msg, sizeof(msg), "ANG:%d,%d,%d,%d\n", target, servo_get_angle(1), servo_get_angle(2), servo_get_angle(3));
+        print_fn(msg);
+        return;
+    }
+
     if (strncmp(p, "claw ", 5) == 0) {
         const char *arg = p + 5;
+        int cmin = 0, cmax = 180;
+        servo_get_claw_range(&cmin, &cmax);
         int angle = -1;
-        if (strcasecmp(arg, "close") == 0) angle = CLAW_CLOSED_ANGLE;
-        else if (strcasecmp(arg, "open") == 0) angle = CLAW_OPEN_ANGLE;
+        if (strcasecmp(arg, "close") == 0 || strcasecmp(arg, "min") == 0) angle = cmin;
+        else if (strcasecmp(arg, "open") == 0 || strcasecmp(arg, "max") == 0) angle = cmax;
+        else if (strcasecmp(arg, "mid") == 0) angle = (cmin + cmax) / 2;
         else angle = atoi(arg);
 
         if (angle >= SERVO_MIN_ANGLE && angle <= SERVO_MAX_ANGLE) {
             servo_set_angle(0, angle);
             char msg[64];
-            snprintf(msg, sizeof(msg), "ANG:%d,%d,%d,%d\n", angle, servo_get_angle(1), servo_get_angle(2), servo_get_angle(3));
+            snprintf(msg, sizeof(msg), "ANG:%d,%d,%d,%d\n", servo_get_angle(0), servo_get_angle(1), servo_get_angle(2), servo_get_angle(3));
             print_fn(msg);
         } else {
-            print_fn(">> Usage: claw <0-180|open|close>\n");
+            print_fn(">> Usage: claw <0-180|open|close|mid>\n");
         }
         return;
     }
@@ -365,6 +434,7 @@ void command_process(const char *cmd_line, command_print_fn_t print_fn) {
         int mn = 0, mx = 180;
         if (sscanf(p + 10, "%d %d", &mn, &mx) == 2) {
             servo_set_scissor_range(mn, mx);
+            servo_get_scissor_range(&mn, &mx);
             char msg[48];
             snprintf(msg, sizeof(msg), "RANGE:%d,%d\n", mn, mx);
             print_fn(msg);
@@ -496,8 +566,13 @@ void command_process(const char *cmd_line, command_print_fn_t print_fn) {
     }
 
     if (strcmp(p, "home") == 0 || strcmp(p, "center") == 0) {
-        servo_move_smooth(90, 90, 90, 90, 550);
-        print_fn(">> Homing all servos to 90 deg...\n");
+        int cmin = 0, cmax = 180, smin = 0, smax = 180;
+        servo_get_claw_range(&cmin, &cmax);
+        servo_get_scissor_range(&smin, &smax);
+        int claw_home = (90 < cmin) ? cmin : (90 > cmax ? cmax : 90);
+        int scis_home = (90 < smin) ? smin : (90 > smax ? smax : 90);
+        servo_move_smooth(claw_home, 90, 90, scis_home, 550);
+        print_fn(">> Homing all servos to 90 deg (clamped to saved ranges)...\n");
         return;
     }
 
@@ -577,11 +652,18 @@ void command_process(const char *cmd_line, command_print_fn_t print_fn) {
         char msg[64];
         snprintf(msg, sizeof(msg), "CAL:%d,%d,%d,%d\n", o1, o2, o3, o4);
         print_fn(msg);
+
         int mn = 0, mx = 180;
         servo_get_scissor_range(&mn, &mx);
         char rmsg[48];
         snprintf(rmsg, sizeof(rmsg), "RANGE:%d,%d\n", mn, mx);
         print_fn(rmsg);
+
+        int cmn = 0, cmx = 180;
+        servo_get_claw_range(&cmn, &cmx);
+        char cmsg[48];
+        snprintf(cmsg, sizeof(cmsg), "CLAW_RANGE:%d,%d\n", cmn, cmx);
+        print_fn(cmsg);
         return;
     }
 

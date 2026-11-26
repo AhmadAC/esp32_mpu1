@@ -1,17 +1,48 @@
+const DEFAULT_SERVO_NAMES = [
+  "Servo 1 — Claw",
+  "Servo 2 — Arm",
+  "Servo 3 — Shoulder",
+  "Scissor Lift (MG996R)"
+];
+
+const DEFAULT_BUTTON_LABELS = {
+  home: "Home All (90°)",
+  detach: "Detach (Idle)",
+  sync: "Sync State",
+  stop: "STOP Motion",
+  clawMin: "Close",
+  clawMid: "Mid",
+  clawMax: "Open",
+  scissorMin: "Min",
+  scissorMid: "Mid",
+  scissorMax: "Max"
+};
+
 let servoAngles = [90, 90, 90, 90];
 let servoOffsets = [0, 0, 0, 0];
 let servoPins = [1, 38, 39, 12];
 let servoEnabled = [false, false, false, false];
 let autoIdleEnabled = false;
-let servoNames = ["Servo 1 — Claw", "Servo 2 — Arm", "Servo 3 — Shoulder", "Servo 4 — Scissor Lift"];
+let servoNames = [...DEFAULT_SERVO_NAMES];
+let buttonLabels = { ...DEFAULT_BUTTON_LABELS };
 let isOffsetMode = false;
+let isEditNamesMode = false;
+let pendingRenameTarget = null; // { kind: "servo" | "button", key: number | string }
 
-// Scissor lift range and proportional height state
+// Claw range state (Servo 1 / idx 0)
+let clawMin = 0;
+let clawMax = 180;
+let draftClawMin = 0;
+let draftClawMax = 180;
+let pendingClawRangeSync = false;
+
+// Scissor lift range and proportional height state (Servo 4 / idx 3)
 let scissorMin = 0;
 let scissorMax = 180;
 let draftMin = 0;
 let draftMax = 180;
 let scissorPercent = 50;
+let pendingScissorRangeSync = false;
 
 let isDraggingSlider = [false, false, false, false];
 let lastSliderEditMs = [0, 0, 0, 0];
@@ -29,16 +60,28 @@ window.addEventListener("touchend", () => {
   for (let i = 0; i < 4; i++) isDraggingSlider[i] = false;
 });
 
+function markPendingRangeSync() {
+  pendingClawRangeSync = true;
+  pendingScissorRangeSync = true;
+}
+
 function initServoStorage() {
   try {
     const storedNames = localStorage.getItem("arm_servo_names_v3");
     if (storedNames) {
       const parsed = JSON.parse(storedNames);
       if (Array.isArray(parsed) && parsed.length >= 3) {
-        servoNames[0] = parsed[0] || servoNames[0];
-        servoNames[1] = parsed[1] || servoNames[1];
-        servoNames[2] = parsed[2] || servoNames[2];
-        if (parsed[3]) servoNames[3] = parsed[3];
+        servoNames[0] = parsed[0] || DEFAULT_SERVO_NAMES[0];
+        servoNames[1] = parsed[1] || DEFAULT_SERVO_NAMES[1];
+        servoNames[2] = parsed[2] || DEFAULT_SERVO_NAMES[2];
+        servoNames[3] = parsed[3] || DEFAULT_SERVO_NAMES[3];
+      }
+    }
+    const storedBtnLabels = localStorage.getItem("arm_button_labels_v1");
+    if (storedBtnLabels) {
+      const parsed = JSON.parse(storedBtnLabels);
+      if (parsed && typeof parsed === "object") {
+        buttonLabels = { ...DEFAULT_BUTTON_LABELS, ...parsed };
       }
     }
     const storedOffsets = localStorage.getItem("arm_servo_offsets_v3");
@@ -48,6 +91,16 @@ function initServoStorage() {
         for (let i = 0; i < Math.min(4, parsed.length); i++) {
           servoOffsets[i] = parsed[i];
         }
+      }
+    }
+    const storedClawRange = localStorage.getItem("claw_trim_range");
+    if (storedClawRange) {
+      const parsed = JSON.parse(storedClawRange);
+      if (parsed && typeof parsed.min === "number" && typeof parsed.max === "number") {
+        clawMin = Math.max(0, Math.min(179, Math.round(parsed.min)));
+        clawMax = Math.max(clawMin + 1, Math.min(180, Math.round(parsed.max)));
+        draftClawMin = clawMin;
+        draftClawMax = clawMax;
       }
     }
     const storedRange = localStorage.getItem("scissor_lift_range");
@@ -64,6 +117,7 @@ function initServoStorage() {
 
   scissorPercent = angleToPercent(servoAngles[3], scissorMin, scissorMax);
   applyAutoIdleState(autoIdleEnabled);
+  updateEditModeUI();
   updateAllServoUI();
 }
 
@@ -77,6 +131,131 @@ function angleToPercent(angle, minA, maxA) {
   const span = Math.max(1, maxA - minA);
   const pct = Math.round(((angle - minA) / span) * 100);
   return Math.max(0, Math.min(100, pct));
+}
+
+function toggleEditNamesMode() {
+  isEditNamesMode = !isEditNamesMode;
+  updateEditModeUI();
+  if (isEditNamesMode) {
+    showToast("Edit Mode ON: Tap any servo name or preset button to rename", "warn");
+  } else {
+    closeRenameModal();
+    showToast("Edit Mode OFF: Names locked", "info");
+  }
+}
+
+function updateEditModeUI() {
+  const banner = document.getElementById("edit-mode-banner");
+  if (banner) {
+    banner.style.display = isEditNamesMode ? "flex" : "none";
+  }
+
+  document.querySelectorAll(".edit-pill-btn").forEach(btn => {
+    if (isEditNamesMode) {
+      btn.classList.add("active-edit");
+      btn.innerText = "Done";
+    } else {
+      btn.classList.remove("active-edit");
+      btn.innerText = "Edit";
+    }
+  });
+
+  document.querySelectorAll(".renameable-name, .renameable-btn").forEach(el => {
+    if (isEditNamesMode) {
+      el.classList.add("edit-target-active");
+    } else {
+      el.classList.remove("edit-target-active");
+    }
+  });
+}
+
+function onServoNameClick(idx) {
+  if (!isEditNamesMode) return;
+  openRenameModal("servo", idx);
+}
+
+function onQuickButtonClick(btnKey, actionFn) {
+  if (isEditNamesMode) {
+    openRenameModal("button", btnKey);
+    return;
+  }
+  if (typeof actionFn === "function") {
+    actionFn();
+  }
+}
+
+function openRenameModal(kind, key) {
+  const modal = document.getElementById("rename-modal");
+  const title = document.getElementById("rename-modal-title");
+  const input = document.getElementById("rename-modal-input");
+  if (!modal || !title || !input) return;
+
+  pendingRenameTarget = { kind, key };
+  if (kind === "servo") {
+    title.innerText = `Rename Servo ${key + 1}`;
+    input.value = servoNames[key] || DEFAULT_SERVO_NAMES[key];
+  } else {
+    title.innerText = "Rename Button Label";
+    input.value = buttonLabels[key] || DEFAULT_BUTTON_LABELS[key] || "";
+  }
+
+  modal.style.display = "flex";
+  setTimeout(() => {
+    input.focus();
+    input.select();
+  }, 40);
+}
+
+function closeRenameModal() {
+  const modal = document.getElementById("rename-modal");
+  if (modal) modal.style.display = "none";
+  pendingRenameTarget = null;
+}
+
+function confirmRenameModal() {
+  if (!pendingRenameTarget) {
+    closeRenameModal();
+    return;
+  }
+  const input = document.getElementById("rename-modal-input");
+  const val = (input?.value || "").trim().substring(0, 28);
+  if (!val) {
+    showToast("Name cannot be empty", "warn");
+    return;
+  }
+
+  if (pendingRenameTarget.kind === "servo") {
+    const idx = pendingRenameTarget.key;
+    servoNames[idx] = val;
+    try { localStorage.setItem("arm_servo_names_v3", JSON.stringify(servoNames)); } catch (e) {}
+  } else {
+    const bKey = pendingRenameTarget.key;
+    buttonLabels[bKey] = val;
+    try { localStorage.setItem("arm_button_labels_v1", JSON.stringify(buttonLabels)); } catch (e) {}
+  }
+
+  closeRenameModal();
+  updateAllServoUI();
+  showToast("Name updated", "success");
+}
+
+function resetCurrentRenameItem() {
+  if (!pendingRenameTarget) {
+    closeRenameModal();
+    return;
+  }
+  if (pendingRenameTarget.kind === "servo") {
+    const idx = pendingRenameTarget.key;
+    servoNames[idx] = DEFAULT_SERVO_NAMES[idx];
+    try { localStorage.setItem("arm_servo_names_v3", JSON.stringify(servoNames)); } catch (e) {}
+  } else {
+    const bKey = pendingRenameTarget.key;
+    buttonLabels[bKey] = DEFAULT_BUTTON_LABELS[bKey];
+    try { localStorage.setItem("arm_button_labels_v1", JSON.stringify(buttonLabels)); } catch (e) {}
+  }
+  closeRenameModal();
+  updateAllServoUI();
+  showToast("Restored default name", "info");
 }
 
 function updateServoStateBadges() {
@@ -119,6 +298,41 @@ function updatePinDisplay() {
   if (inp4) inp4.value = servoPins[3];
 }
 
+function updateClawTrimUI() {
+  const rangeBadge = document.getElementById("claw-range-badge");
+  const trimBadge = document.getElementById("claw-trim-sync-badge");
+  if (rangeBadge) rangeBadge.innerText = `Range: ${clawMin}° – ${clawMax}°`;
+
+  const qMin = document.getElementById("claw-quick-min-lbl");
+  const qMid = document.getElementById("claw-quick-mid-lbl");
+  const qMax = document.getElementById("claw-quick-max-lbl");
+  const midAngle = Math.round((clawMin + clawMax) / 2);
+  if (qMin) qMin.innerText = `${buttonLabels.clawMin || "Close"} (${clawMin}°)`;
+  if (qMid) qMid.innerText = `${buttonLabels.clawMid || "Mid"} (${midAngle}°)`;
+  if (qMax) qMax.innerText = `${buttonLabels.clawMax || "Open"} (${clawMax}°)`;
+
+  const minValEl = document.getElementById("claw-min-trim-val");
+  const maxValEl = document.getElementById("claw-max-trim-val");
+  const minSl = document.getElementById("claw-min-trim-slider");
+  const maxSl = document.getElementById("claw-max-trim-slider");
+
+  if (minValEl) minValEl.innerText = `${draftClawMin}°`;
+  if (maxValEl) maxValEl.innerText = `${draftClawMax}°`;
+  if (minSl) minSl.value = draftClawMin;
+  if (maxSl) maxSl.value = draftClawMax;
+
+  if (trimBadge) {
+    const dirty = (draftClawMin !== clawMin) || (draftClawMax !== clawMax);
+    if (dirty) {
+      trimBadge.innerText = "Unsaved";
+      trimBadge.className = "chip chip-warn";
+    } else {
+      trimBadge.innerText = "Saved";
+      trimBadge.className = "chip chip-ok";
+    }
+  }
+}
+
 function updateScissorUI() {
   const liftSl = document.getElementById("lift-slider");
   const liftVal = document.getElementById("lift-val");
@@ -133,9 +347,9 @@ function updateScissorUI() {
   const qMid = document.getElementById("quick-mid-lbl");
   const qMax = document.getElementById("quick-max-lbl");
   const midAngle = Math.round((scissorMin + scissorMax) / 2);
-  if (qMin) qMin.innerText = `Min (${scissorMin}°)`;
-  if (qMid) qMid.innerText = `Mid (${midAngle}°)`;
-  if (qMax) qMax.innerText = `Max (${scissorMax}°)`;
+  if (qMin) qMin.innerText = `${buttonLabels.scissorMin || "Min"} (${scissorMin}°)`;
+  if (qMid) qMid.innerText = `${buttonLabels.scissorMid || "Mid"} (${midAngle}°)`;
+  if (qMax) qMax.innerText = `${buttonLabels.scissorMax || "Max"} (${scissorMax}°)`;
 
   const minValEl = document.getElementById("min-trim-val");
   const maxValEl = document.getElementById("max-trim-val");
@@ -157,6 +371,21 @@ function updateScissorUI() {
       trimBadge.className = "chip chip-ok";
     }
   }
+}
+
+function updateQuickButtonsLabels() {
+  const homeLbl = document.getElementById("quick-home-lbl");
+  const detachLbl = document.getElementById("quick-detach-lbl");
+  const syncLbl = document.getElementById("quick-sync-lbl");
+  const stopLbl = document.getElementById("quick-stop-lbl");
+
+  if (homeLbl) homeLbl.innerText = buttonLabels.home || DEFAULT_BUTTON_LABELS.home;
+  if (detachLbl) detachLbl.innerText = buttonLabels.detach || DEFAULT_BUTTON_LABELS.detach;
+  if (syncLbl) syncLbl.innerText = buttonLabels.sync || DEFAULT_BUTTON_LABELS.sync;
+  if (stopLbl) stopLbl.innerText = buttonLabels.stop || DEFAULT_BUTTON_LABELS.stop;
+
+  const s4Hdr = document.getElementById("s4-header");
+  if (s4Hdr) s4Hdr.innerText = servoNames[3] || DEFAULT_SERVO_NAMES[3];
 }
 
 function updateAllServoUI() {
@@ -188,10 +417,15 @@ function updateAllServoUI() {
       if (btnC) btnC.innerText = "-5°";
       if (btnD) btnD.innerText = "+5°";
     } else {
+      const minBound = (i === 0) ? clawMin : 0;
+      const maxBound = (i === 0) ? clawMax : 180;
+      if (i === 0) {
+        servoAngles[0] = Math.max(minBound, Math.min(maxBound, servoAngles[0]));
+      }
       if (sl) {
         sl.classList.remove("offset-slider");
-        sl.min = "0";
-        sl.max = "180";
+        sl.min = String(minBound);
+        sl.max = String(maxBound);
         sl.value = servoAngles[i];
       }
       if (hdr) {
@@ -204,19 +438,11 @@ function updateAllServoUI() {
     }
   }
 
+  updateQuickButtonsLabels();
+  updateClawTrimUI();
   updateScissorUI();
   updateServoStateBadges();
   updatePinDisplay();
-}
-
-function editServoName(idx) {
-  const current = servoNames[idx] || `Servo ${idx + 1}`;
-  const next = prompt(`Rename Servo ${idx + 1}:`, current);
-  if (next && next.trim().length > 0) {
-    servoNames[idx] = next.trim().substring(0, 28);
-    try { localStorage.setItem("arm_servo_names_v3", JSON.stringify(servoNames)); } catch (e) {}
-    updateAllServoUI();
-  }
 }
 
 function toggleOffsetMode() {
@@ -285,10 +511,11 @@ function onServoSlider(idx, val) {
     pendingServoCmds[`o${n}`] = `offset s${n} ${parsed}`;
     try { localStorage.setItem("arm_servo_offsets_v3", JSON.stringify(servoOffsets)); } catch (e) {}
   } else {
-    servoAngles[idx] = parsed;
+    const clamped = (idx === 0) ? Math.max(clawMin, Math.min(clawMax, parsed)) : parsed;
+    servoAngles[idx] = clamped;
     const valEl = document.getElementById(`s${n}-val`);
-    if (valEl) valEl.innerText = `${parsed}°`;
-    pendingServoCmds[`s${n}`] = `s${n} ${parsed}`;
+    if (valEl) valEl.innerText = `${clamped}°`;
+    pendingServoCmds[`s${n}`] = `s${n} ${clamped}`;
   }
 
   triggerThrottledSend();
@@ -308,9 +535,159 @@ function onSliderCommit(idx, val) {
     try { localStorage.setItem("arm_servo_offsets_v3", JSON.stringify(servoOffsets)); } catch (e) {}
   } else {
     delete pendingServoCmds[`s${n}`];
-    servoAngles[idx] = parsed;
-    sendCommand(`s${n} ${parsed}`);
+    const clamped = (idx === 0) ? Math.max(clawMin, Math.min(clawMax, parsed)) : parsed;
+    servoAngles[idx] = clamped;
+    sendCommand(`s${n} ${clamped}`);
   }
+}
+
+// Claw (S1) Both-Sides End-Stop Trimming Handlers
+function moveClawToMin() {
+  lastSliderEditMs[0] = Date.now();
+  servoAngles[0] = clawMin;
+  servoEnabled[0] = true;
+  updateAllServoUI();
+  sendCommand(`s1 ${clawMin}`);
+  showToast(`Claw to Closed Min (${clawMin}°)`, "info");
+}
+
+function moveClawToMid() {
+  lastSliderEditMs[0] = Date.now();
+  const mid = Math.round((clawMin + clawMax) / 2);
+  servoAngles[0] = mid;
+  servoEnabled[0] = true;
+  updateAllServoUI();
+  sendCommand(`s1 ${mid}`);
+  showToast(`Claw to Mid (${mid}°)`, "info");
+}
+
+function moveClawToMax() {
+  lastSliderEditMs[0] = Date.now();
+  servoAngles[0] = clawMax;
+  servoEnabled[0] = true;
+  updateAllServoUI();
+  sendCommand(`s1 ${clawMax}`);
+  showToast(`Claw to Open Max (${clawMax}°)`, "info");
+}
+
+function onClawMinTrimSlider(val) {
+  const parsed = parseInt(val, 10);
+  if (isNaN(parsed)) return;
+  setClawMinTrimAngle(parsed, true);
+}
+
+function nudgeClawMinTrim(delta) {
+  setClawMinTrimAngle(draftClawMin + delta, false);
+}
+
+function setClawMinTrimAngle(target, throttled) {
+  lastSliderEditMs[0] = Date.now();
+  let next = Math.max(0, Math.min(179, target));
+  if (next >= draftClawMax) {
+    next = draftClawMax - 1;
+    showToast("Closed side must be below open side", "warn");
+  }
+  draftClawMin = next;
+  servoAngles[0] = next;
+  servoEnabled[0] = true;
+  updateClawTrimUI();
+  updateServoStateBadges();
+
+  if (throttled) {
+    pendingServoCmds["claw_test"] = `claw_test ${next}`;
+    triggerThrottledSend();
+  } else {
+    delete pendingServoCmds["claw_test"];
+    sendCommand(`claw_test ${next}`);
+  }
+}
+
+function onClawMaxTrimSlider(val) {
+  const parsed = parseInt(val, 10);
+  if (isNaN(parsed)) return;
+  setClawMaxTrimAngle(parsed, true);
+}
+
+function nudgeClawMaxTrim(delta) {
+  setClawMaxTrimAngle(draftClawMax + delta, false);
+}
+
+function setClawMaxTrimAngle(target, throttled) {
+  lastSliderEditMs[0] = Date.now();
+  let next = Math.max(1, Math.min(180, target));
+  if (next <= draftClawMin) {
+    next = draftClawMin + 1;
+    showToast("Open side must be above closed side", "warn");
+  }
+  draftClawMax = next;
+  servoAngles[0] = next;
+  servoEnabled[0] = true;
+  updateClawTrimUI();
+  updateServoStateBadges();
+
+  if (throttled) {
+    pendingServoCmds["claw_test"] = `claw_test ${next}`;
+    triggerThrottledSend();
+  } else {
+    delete pendingServoCmds["claw_test"];
+    sendCommand(`claw_test ${next}`);
+  }
+}
+
+function testClawTrimEnd(which) {
+  lastSliderEditMs[0] = Date.now();
+  const target = (which === "min") ? draftClawMin : draftClawMax;
+  servoAngles[0] = target;
+  servoEnabled[0] = true;
+  updateClawTrimUI();
+  updateServoStateBadges();
+  sendCommand(`claw_test ${target}`);
+}
+
+async function saveClawRange() {
+  const btn = document.getElementById("save-claw-range-btn");
+  const txt = document.getElementById("save-claw-range-text");
+  if (txt) txt.innerText = "Saving...";
+  if (btn) btn.style.background = "#0284c7";
+
+  clawMin = draftClawMin;
+  clawMax = draftClawMax;
+  pendingClawRangeSync = false;
+  servoAngles[0] = Math.max(clawMin, Math.min(clawMax, servoAngles[0]));
+
+  try {
+    localStorage.setItem("claw_trim_range", JSON.stringify({ min: clawMin, max: clawMax }));
+  } catch (e) {}
+
+  await sendCommand(`claw_range_set ${clawMin} ${clawMax}`);
+  updateAllServoUI();
+
+  appendLog("Calibration", `Saved Claw Range: ${clawMin}° – ${clawMax}°`);
+  showToast(`Saved Claw Trim (${clawMin}°–${clawMax}°) to Flash!`, "success");
+
+  if (txt) txt.innerText = "Saved to Flash";
+  if (btn) btn.style.background = "#059669";
+  setTimeout(() => {
+    if (txt) txt.innerText = "Save Claw Trim";
+    if (btn) btn.style.background = "#10b981";
+  }, 1500);
+}
+
+async function resetClawRange() {
+  draftClawMin = 0;
+  draftClawMax = 180;
+  clawMin = 0;
+  clawMax = 180;
+  pendingClawRangeSync = false;
+
+  try {
+    localStorage.setItem("claw_trim_range", JSON.stringify({ min: 0, max: 180 }));
+  } catch (e) {}
+
+  await sendCommand("claw_range_set 0 180");
+  updateAllServoUI();
+  appendLog("Calibration", "Reset Claw Range to 0° – 180°");
+  showToast("Claw range reset to 0°–180°", "info");
 }
 
 // Scissor Lift UI Handlers (Servo 4 / Default GPIO 12)
@@ -361,6 +738,7 @@ function nudgeLiftPercent(deltaPct) {
 }
 
 function moveToSavedMin() {
+  lastSliderEditMs[3] = Date.now();
   servoAngles[3] = scissorMin;
   scissorPercent = 0;
   servoEnabled[3] = true;
@@ -370,6 +748,7 @@ function moveToSavedMin() {
 }
 
 function moveToSavedMid() {
+  lastSliderEditMs[3] = Date.now();
   const mid = Math.round((scissorMin + scissorMax) / 2);
   servoAngles[3] = mid;
   scissorPercent = 50;
@@ -380,6 +759,7 @@ function moveToSavedMid() {
 }
 
 function moveToSavedMax() {
+  lastSliderEditMs[3] = Date.now();
   servoAngles[3] = scissorMax;
   scissorPercent = 100;
   servoEnabled[3] = true;
@@ -412,11 +792,11 @@ function setMinTrimAngle(target, throttled) {
   updateAllServoUI();
 
   if (throttled) {
-    pendingServoCmds["s4"] = `s4 ${next}`;
+    pendingServoCmds["scissor_test"] = `scissor_test ${next}`;
     triggerThrottledSend();
   } else {
-    delete pendingServoCmds["s4"];
-    sendCommand(`s4 ${next}`);
+    delete pendingServoCmds["scissor_test"];
+    sendCommand(`scissor_test ${next}`);
   }
 }
 
@@ -444,11 +824,11 @@ function setMaxTrimAngle(target, throttled) {
   updateAllServoUI();
 
   if (throttled) {
-    pendingServoCmds["s4"] = `s4 ${next}`;
+    pendingServoCmds["scissor_test"] = `scissor_test ${next}`;
     triggerThrottledSend();
   } else {
-    delete pendingServoCmds["s4"];
-    sendCommand(`s4 ${next}`);
+    delete pendingServoCmds["scissor_test"];
+    sendCommand(`scissor_test ${next}`);
   }
 }
 
@@ -459,7 +839,7 @@ function testTrimEnd(which) {
   scissorPercent = (which === "min") ? 0 : 100;
   servoEnabled[3] = true;
   updateAllServoUI();
-  sendCommand(`move ${servoAngles[0]} ${servoAngles[1]} ${servoAngles[2]} ${target} 350`);
+  sendCommand(`scissor_test ${target}`);
 }
 
 async function saveScissorRange() {
@@ -470,6 +850,7 @@ async function saveScissorRange() {
 
   scissorMin = draftMin;
   scissorMax = draftMax;
+  pendingScissorRangeSync = false;
   scissorPercent = angleToPercent(servoAngles[3], scissorMin, scissorMax);
 
   try {
@@ -495,6 +876,7 @@ async function resetScissorRange() {
   draftMax = 180;
   scissorMin = 0;
   scissorMax = 180;
+  pendingScissorRangeSync = false;
   scissorPercent = angleToPercent(servoAngles[3], scissorMin, scissorMax);
 
   try {
@@ -534,9 +916,11 @@ function servoStepAction(idx, normalDelta, trimDelta) {
 
 function nudgeServo(idx, delta) {
   lastSliderEditMs[idx] = Date.now();
+  const minBound = (idx === 0) ? clawMin : 0;
+  const maxBound = (idx === 0) ? clawMax : 180;
   let next = (servoAngles[idx] || 90) + delta;
-  if (next < 0) next = 0;
-  if (next > 180) next = 180;
+  if (next < minBound) next = minBound;
+  if (next > maxBound) next = maxBound;
   servoAngles[idx] = next;
   servoEnabled[idx] = true;
   updateServoStateBadges();
@@ -600,9 +984,13 @@ async function saveCalibrationOffsets() {
 }
 
 function homeAllServos() {
-  servoAngles = [90, 90, 90, 90];
+  const now = Date.now();
+  for (let i = 0; i < 4; i++) lastSliderEditMs[i] = now;
+  const clawHome = Math.max(clawMin, Math.min(clawMax, 90));
+  const scisHome = Math.max(scissorMin, Math.min(scissorMax, 90));
+  servoAngles = [clawHome, 90, 90, scisHome];
   servoEnabled = [true, true, true, true];
-  scissorPercent = angleToPercent(90, scissorMin, scissorMax);
+  scissorPercent = angleToPercent(scisHome, scissorMin, scissorMax);
   if (isOffsetMode) toggleOffsetMode();
   else updateAllServoUI();
   sendCommand("home");
@@ -617,11 +1005,13 @@ function detachAllServos() {
 }
 
 function requestCalibrationSync() {
+  markPendingRangeSync();
   sendCommand("cal_get");
-  showToast("Fetching trim offsets & scissor range...", "info");
+  showToast("Fetching trim offsets, claw & scissor ranges...", "info");
 }
 
 function requestStatusSync() {
+  markPendingRangeSync();
   sendCommand("status");
   sendCommand("mpu_get");
   showToast("Syncing arm & scissor state...", "info");
@@ -662,43 +1052,93 @@ function applyReceivedAngles(s1, s2, s3, s4, forceSync = false) {
 
   for (let i = 0; i < 4; i++) {
     if (isNaN(incoming[i])) continue;
-    if (!forceSync && (isDraggingSlider[i] || (i === 3 && isDraggingLift) || (now - lastSliderEditMs[i]) < 600)) {
+    if (!forceSync && (isDraggingSlider[i] || (i === 3 && isDraggingLift) || (now - lastSliderEditMs[i]) < 800)) {
       continue;
     }
-    servoAngles[i] = incoming[i];
+    const clampedVal = (i === 0) ? Math.max(clawMin, Math.min(clawMax, incoming[i])) : incoming[i];
+    servoAngles[i] = clampedVal;
     const n = i + 1;
     if (i < 3 && !isOffsetMode) {
       const sl = document.getElementById(`s${n}-slider`);
-      if (sl) sl.value = incoming[i];
+      if (sl) sl.value = clampedVal;
       const lbl = document.getElementById(`s${n}-val`);
-      if (lbl) lbl.innerText = `${incoming[i]}°`;
+      if (lbl) lbl.innerText = `${clampedVal}°`;
     }
   }
 
-  if (!isDraggingLift && (now - lastSliderEditMs[3]) >= 600) {
+  if (!isDraggingLift && (now - lastSliderEditMs[3]) >= 800) {
     scissorPercent = angleToPercent(servoAngles[3], scissorMin, scissorMax);
   }
   updateScissorUI();
 }
 
-function applyReceivedOffsets(o1, o2, o3, o4) {
+function applyReceivedOffsets(o1, o2, o3, o4, forceSync = false) {
   const incoming = [o1, o2, o3, (o4 !== undefined ? o4 : servoOffsets[3])];
+  const now = Date.now();
+  let changed = false;
+
   for (let i = 0; i < 4; i++) {
     if (isNaN(incoming[i])) continue;
-    servoOffsets[i] = incoming[i];
+    if (!forceSync && (isDraggingSlider[i] || (now - lastSliderEditMs[i]) < 800)) {
+      continue;
+    }
+    if (servoOffsets[i] !== incoming[i]) {
+      servoOffsets[i] = incoming[i];
+      changed = true;
+    }
     const n = i + 1;
     const offEl = document.getElementById(`o${n}-val`);
     if (offEl) offEl.innerText = `${incoming[i] > 0 ? "+" : ""}${incoming[i]}°`;
   }
-  if (isOffsetMode) updateAllServoUI();
+  if (changed && isOffsetMode) updateAllServoUI();
 }
 
-function applyReceivedRange(minA, maxA) {
+function applyReceivedClawRange(minA, maxA, forceDraft = false) {
   if (isNaN(minA) || isNaN(maxA)) return;
-  scissorMin = Math.max(0, Math.min(179, minA));
-  scissorMax = Math.max(scissorMin + 1, Math.min(180, maxA));
-  draftMin = scissorMin;
-  draftMax = scissorMax;
+  const nextMin = Math.max(0, Math.min(179, minA));
+  const nextMax = Math.max(nextMin + 1, Math.min(180, maxA));
+  const savedChanged = (nextMin !== clawMin) || (nextMax !== clawMax);
+  const hasUnsavedDraft = (draftClawMin !== clawMin) || (draftClawMax !== clawMax);
+
+  if (!savedChanged && !forceDraft && !pendingClawRangeSync) {
+    return;
+  }
+
+  clawMin = nextMin;
+  clawMax = nextMax;
+
+  if (forceDraft || pendingClawRangeSync || !hasUnsavedDraft) {
+    draftClawMin = clawMin;
+    draftClawMax = clawMax;
+    pendingClawRangeSync = false;
+  }
+
+  try {
+    localStorage.setItem("claw_trim_range", JSON.stringify({ min: clawMin, max: clawMax }));
+  } catch (e) {}
+  updateAllServoUI();
+}
+
+function applyReceivedRange(minA, maxA, forceDraft = false) {
+  if (isNaN(minA) || isNaN(maxA)) return;
+  const nextMin = Math.max(0, Math.min(179, minA));
+  const nextMax = Math.max(nextMin + 1, Math.min(180, maxA));
+  const savedChanged = (nextMin !== scissorMin) || (nextMax !== scissorMax);
+  const hasUnsavedDraft = (draftMin !== scissorMin) || (draftMax !== scissorMax);
+
+  if (!savedChanged && !forceDraft && !pendingScissorRangeSync) {
+    return;
+  }
+
+  scissorMin = nextMin;
+  scissorMax = nextMax;
+
+  if (forceDraft || pendingScissorRangeSync || !hasUnsavedDraft) {
+    draftMin = scissorMin;
+    draftMax = scissorMax;
+    pendingScissorRangeSync = false;
+  }
+
   scissorPercent = angleToPercent(servoAngles[3], scissorMin, scissorMax);
   try {
     localStorage.setItem("scissor_lift_range", JSON.stringify({ min: scissorMin, max: scissorMax }));
